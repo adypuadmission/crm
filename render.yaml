@@ -52,14 +52,12 @@ services:
         value: smtp.gmail.com
       - key: SMTP_PORT
         value: "587"
-      - key: SMTP_USER
-        sync: false
       - key: SMTP_PASS
         sync: false
       - key: SMS_PROVIDER
         value: fast2sms
-      - key: OTP_REQUIRED
-        value: "true"
+      - key: OTP_REQUIRED        # default only — the admin switches student OTP on/off in the Security tab
+        value: "false"
       - key: SEND_CONFIRMATION_SMS
         value: "true"
       - key: MSG91_AUTH_KEY

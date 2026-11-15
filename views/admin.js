@@ -483,7 +483,7 @@
   async function loadSecurity() {
     const r = await fetch('/api/admin/security?' + new URLSearchParams({ severity: $('#secSev').value }), { headers: { 'X-Requested-With': 'fetch' } });
     if (!r.ok) return; const j = await r.json();
-    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal;
+    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired;
     const st = j.status, ok = (b) => (b ? '✅' : '⚠️');
     $('#secStatus').innerHTML = [
       [true, `Encryption at rest: <b>${esc(st.encryption)}</b>`], [st.dataKey, st.dataKey ? 'Dedicated encryption key (DATA_KEY) set' : 'Set a dedicated <code>DATA_KEY</code> in the server settings'],
@@ -502,7 +502,16 @@
       <td class="small">${esc(e.details)}</td><td class="small muted">${esc(e.ip)}<br>${esc(uaShort(e.ua))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">No events yet.</td></tr>';
   }
   $('#secSev').addEventListener('change', loadSecurity);
+  $('#secTest').addEventListener('click', async (e) => {
+    e.target.disabled = true; toast('Sending test alert…');
+    const r = await fetch('/api/admin/security/test-alert', { method: 'POST', headers: { 'X-Requested-With': 'fetch' } }).then((x) => x.json()).catch(() => ({}));
+    e.target.disabled = false; toast(`SMS: ${r.sms || '?'} · Email: ${r.email || '?'}`); loadSecurity();
+  });
   $('#secSeen').addEventListener('click', async () => { await fetch('/api/admin/security/seen', { method: 'POST', headers: { 'X-Requested-With': 'fetch' } }); loadSecurity(); toast('Alerts marked as seen'); });
+  $('#otpRequired').addEventListener('change', async (e) => {
+    await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ otpRequired: e.target.checked }) });
+    toast(e.target.checked ? 'Student OTP verification is ON' : 'Student OTP verification is OFF — students can submit without OTP'); loadSecurity();
+  });
   $('#allowReveal').addEventListener('change', async (e) => {
     await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ allowReveal: e.target.checked }) });
     toast(e.target.checked ? 'Counsellors can now view a number to call (each view is logged)' : 'Counsellors see masked numbers only'); loadSecurity();

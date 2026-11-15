@@ -25,7 +25,8 @@ const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toSt
 const STATUSES = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Applied', 'Admitted', 'Not Interested'];
 const IS_PROD = process.env.NODE_ENV === 'production';
 // OTP: on by default. OTP_DEMO_MODE=true shows the code on screen (testing only — never in production).
-const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false';
+const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false'; // default; the admin can switch it in the Security tab
+const otpOn = async () => !!(await db.getSetting('otp_required', OTP_REQUIRED));
 const OTP_DEMO = process.env.OTP_DEMO_MODE === 'true';
 const SEND_CONFIRMATION = (process.env.SEND_CONFIRMATION_SMS || 'true') !== 'false';
 if (OTP_DEMO && IS_PROD) console.warn('⚠  OTP_DEMO_MODE is on in production — OTPs are shown on screen. Turn it off before going live!');
@@ -46,10 +47,12 @@ const ADMIN_2FA = !!ADMIN_MOBILE && process.env.ADMIN_2FA !== 'false';
 if (!ADMIN_MOBILE) console.warn('⚠  ADMIN_MOBILE not set — security alerts will appear only in the dashboard and admin login has no OTP step.');
 const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
 let mailer = null;
-if (ALERT_EMAIL_TO && process.env.SMTP_HOST) {
+// Email alerts: the alert mailbox can send to itself. SMTP_USER defaults to ALERT_EMAIL_TO; SMTP_PASS is that mailbox's App Password.
+const SMTP_USER = process.env.SMTP_USER || ALERT_EMAIL_TO;
+if (ALERT_EMAIL_TO && process.env.SMTP_PASS) {
   try {
-    mailer = require('nodemailer').createTransport({ host: process.env.SMTP_HOST, port: +(process.env.SMTP_PORT || 587), secure: +(process.env.SMTP_PORT || 587) === 465,
-      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined });
+    mailer = require('nodemailer').createTransport({ host: process.env.SMTP_HOST || 'smtp.gmail.com', port: +(process.env.SMTP_PORT || 587), secure: +(process.env.SMTP_PORT || 587) === 465,
+      auth: { user: SMTP_USER, pass: process.env.SMTP_PASS } });
   } catch (e) { console.error('Email alerts disabled:', e.message); }
 }
 
@@ -106,6 +109,12 @@ const cookieOpts = `Path=/; HttpOnly; SameSite=Strict${IS_PROD ? '; Secure' : ''
 // ---------- audit log & alerts ----------
 const ALERT_GAP = 10 * 60 * 1000;
 const lastAlert = new Map();
+function sendAlertEmail(text) {
+  const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  return mailer.sendMail({ from: `"ADYPU CRM Security" <${process.env.SMTP_FROM || SMTP_USER}>`, to: ALERT_EMAIL_TO, subject: `⚠ ADYPU CRM security alert`,
+    text: `${text}\n\nTime: ${when} IST\nOpen the admin dashboard → Security tab for details.\n\n— ADYPU Admission CRM (automatic message)`,
+    html: `<div style="font-family:Arial,sans-serif;max-width:560px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>⚠ ADYPU CRM security alert</b></div><div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px"><p style="font-size:15px;margin:0 0 12px">${String(text).replace(/[<&>]/g, '')}</p><p style="color:#64748b;font-size:13px;margin:0">Time: ${when} IST<br>Open the admin dashboard → <b>Security</b> tab for details.</p></div></div>` });
+}
 async function notifyAdmin(text, key) {
   const k = key || text;
   if (Date.now() - (lastAlert.get(k) || 0) < ALERT_GAP) return; // throttle repeats
@@ -114,8 +123,7 @@ async function notifyAdmin(text, key) {
   // WhatsApp alert too (works when the WhatsApp sending number is the office number, not the admin's own)
   const waTo = String(process.env.ALERT_WHATSAPP_TO || ADMIN_MOBILE || '').replace(/\D/g, '').slice(-10);
   if (waTo) require('./whatsapp').send('alert', waTo, { text }).catch(() => {});
-  if (mailer) mailer.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to: ALERT_EMAIL_TO, subject: `⚠ ADYPU CRM security alert`,
-    text: `${text}\n\nTime: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST\nOpen the admin dashboard → Security tab for details.` }).catch((e) => console.error('alert email', e.message));
+  if (mailer) sendAlertEmail(text).catch((e) => console.error('alert email', e.message));
 }
 const SEVERE = new Set(['high', 'critical']);
 async function audit(req, action, details = '', severity = 'info', who) {
@@ -254,7 +262,7 @@ app.get('/qr-poster.pdf', async (req, res) => {
   doc.end();
 });
 
-app.get('/api/config', (_req, res) => res.json({ levels: LEVELS, academicYear: ACADEMIC_YEAR, cities: CITY_SUGGESTIONS, otpRequired: OTP_REQUIRED, chips: chat.CHIPS, contacts: CONTACTS }));
+app.get('/api/config', async (_req, res) => res.json({ levels: LEVELS, academicYear: ACADEMIC_YEAR, cities: CITY_SUGGESTIONS, otpRequired: await otpOn(), chips: chat.CHIPS, contacts: CONTACTS }));
 app.get('/api/region', (req, res) => res.json(resolveRegion(String(req.query.city || '').slice(0, 60))));
 
 // ---------- mobile OTP ----------
@@ -339,7 +347,7 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
     const { errors, data } = validateEnquiry(req.body);
     if (Object.keys(errors).length) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: errors });
     const verified = checkVerifiedToken(req.body.otpToken, data.mobile);
-    if (OTP_REQUIRED && !verified) return res.status(401).json({ error: 'Please verify your mobile number with the OTP.', needOtp: true });
+    if ((await otpOn()) && !verified) return res.status(401).json({ error: 'Please verify your mobile number with the OTP.', needOtp: true });
     const dup = await db.findRecentDuplicate(data.mobile, data.course);
     if (dup) return res.json({ ok: true, ref_no: dup.ref_no, duplicate: true, name: dup.student_name });
     // Came from a counsellor's personal QR? Credit the enquiry to them.
@@ -596,16 +604,25 @@ const genPassword = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrs
 app.get('/api/admin/security', requireAdmin, async (req, res) => {
   const [events, unseen, allowReveal, raw] = await Promise.all([db.listAudit({ limit: Math.min(1000, +req.query.limit || 400), severity: req.query.severity || undefined }),
     db.countUnseenAlerts(), db.getSetting('allow_reveal', false), db.rawSample(3)]);
-  res.json({ events, unseen, settings: { allowReveal },
+  res.json({ events, unseen, settings: { allowReveal, otpRequired: await otpOn() },
     status: { adminName: ADMIN_NAME, encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
       smsProvider: sms.provider, https: IS_PROD, sessionHours: SESSION_HOURS, idleMinutes: Number(process.env.IDLE_MINUTES || 15) },
     // what someone opening the database directly would see
     rawSample: raw.map((r) => ({ ref_no: r.ref_no, student_name: String(r.student_name || '').slice(0, 30) + '…', mobile: String(r.mobile || '').slice(0, 30) + '…' })) });
 });
+app.post('/api/admin/security/test-alert', requireAdmin, requireXhr, async (req, res) => {
+  const text = `Test alert from ${ADMIN_NAME} - security alerts are working`;
+  const out = { sms: ADMIN_MOBILE ? 'sent to +91 ' + sec.maskMobile(ADMIN_MOBILE) : 'no admin mobile set', email: 'not set up (add SMTP_PASS on Render)' };
+  if (ADMIN_MOBILE) { const r = await sms.send('alert', ADMIN_MOBILE, { text }); out.sms = r.ok ? out.sms : 'SMS failed - check the SMS account balance'; }
+  if (mailer) { try { await sendAlertEmail(text); out.email = 'sent to ' + ALERT_EMAIL_TO; } catch (e) { out.email = 'failed: ' + e.message.slice(0, 120); } }
+  audit(req, 'test_alert', `SMS: ${out.sms} | Email: ${out.email}`, 'info');
+  res.json(out);
+});
 app.post('/api/admin/security/seen', requireAdmin, requireXhr, async (_req, res) => { await db.markAlertsSeen(); res.json({ ok: true }); });
 app.patch('/api/admin/security/settings', requireAdmin, requireXhr, async (req, res) => {
   if (req.body.allowReveal !== undefined) { await db.setSetting('allow_reveal', !!req.body.allowReveal); audit(req, 'setting_changed', `counsellors can view numbers: ${!!req.body.allowReveal ? 'ON' : 'OFF'}`, 'medium'); }
-  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false) } });
+  if (req.body.otpRequired !== undefined) { await db.setSetting('otp_required', !!req.body.otpRequired); audit(req, 'setting_changed', `student mobile OTP: ${req.body.otpRequired ? 'ON' : 'OFF'}`, 'medium'); }
+  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false), otpRequired: await otpOn() } });
 });
 
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {

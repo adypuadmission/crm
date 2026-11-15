@@ -165,6 +165,7 @@
       <article class="card">
         <header class="ch"><div><b>🔑 Access control</b><small>Only you (main admin) can see full numbers and download data</small></div></header>
         <label class="switch-row"><input type="checkbox" id="allowReveal"><span><b>Let counsellors call / WhatsApp their own students directly</b><small>Off = counsellors only ever see 98XXXXXX10 (students still get the counsellor's WhatsApp number and can message first). When on, each call/chat is logged and you get an alert.</small></span></label>
+        <label class="switch-row"><input type="checkbox" id="otpRequired"><span><b>Students must verify their mobile with an OTP</b><small>Off = students submit the form without an OTP (no OTP SMS is sent). Turn on again once cheaper OTP SMS / WhatsApp is ready.</small></span></label>
         <p class="cc-hint">Sub-admins can never download Excel/PDF, open the admin dashboard, copy, print or screenshot the list without you being told.</p>
       </article>
       <article class="card">
@@ -175,7 +176,7 @@
     <article class="card">
       <header class="ch"><div><b>🚨 Security log</b><small id="secSum"></small></div>
         <div class="ch-actions"><select id="secSev"><option value="">All events</option><option value="high">⚠ Alerts only</option></select>
-        <button class="btn ghost" id="secSeen">✓ Mark alerts as seen</button></div></header>
+        <button class="btn ghost" id="secTest">🔔 Send test alert</button> <button class="btn ghost" id="secSeen">✓ Mark alerts as seen</button></div></header>
       <div class="table-wrap"><table class="sec-table"><thead><tr><th>When (IST)</th><th>Severity</th><th>Who</th><th>What happened</th><th>Details</th><th>IP / device</th></tr></thead><tbody id="secRows"></tbody></table></div>
     </article>
   </section>
