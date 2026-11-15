@@ -1,0 +1,653 @@
+require('dotenv').config();
+const express = require('express');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const path = require('path');
+const ExcelJS = require('exceljs');
+const PDFDocument = require('pdfkit');
+const db = require('./db');
+const { LEVELS, courseLabel, isValid } = require('./courses');
+const sms = require('./sms');
+const chat = require('./chat');
+const { resolveRegion, CITY_SUGGESTIONS, REGIONS } = require('./regions');
+const CONTACTS = require('./contacts');
+
+const PORT = process.env.PORT || 3000;
+const ACADEMIC_YEAR = process.env.ACADEMIC_YEAR || '2027–28';
+const ADMIN_USER = process.env.ADMIN_USERNAME || 'admin';
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const STATUSES = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Applied', 'Admitted', 'Not Interested'];
+const IS_PROD = process.env.NODE_ENV === 'production';
+// OTP: on by default. OTP_DEMO_MODE=true shows the code on screen (testing only — never in production).
+const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false';
+const OTP_DEMO = process.env.OTP_DEMO_MODE === 'true';
+const SEND_CONFIRMATION = (process.env.SEND_CONFIRMATION_SMS || 'true') !== 'false';
+if (OTP_DEMO && IS_PROD) console.warn('⚠  OTP_DEMO_MODE is on in production — OTPs are shown on screen. Turn it off before going live!');
+if (OTP_REQUIRED && sms.provider === 'console' && !OTP_DEMO) console.warn('⚠  SMS_PROVIDER=console: OTPs are only printed in this log, not sent. Configure an SMS provider before going live.');
+
+// Admin password: prefer a bcrypt hash; fall back to a plain env password (hashed in memory).
+let ADMIN_HASH = process.env.ADMIN_PASSWORD_HASH;
+if (!ADMIN_HASH) {
+  const pw = process.env.ADMIN_PASSWORD || 'ChangeMe@ADYPU2027';
+  if (!process.env.ADMIN_PASSWORD) console.warn('⚠  ADMIN_PASSWORD not set — using the default. Set it before going live!');
+  ADMIN_HASH = bcrypt.hashSync(pw, 12);
+}
+if (!process.env.SESSION_SECRET) console.warn('⚠  SESSION_SECRET not set — admin sessions reset on every restart.');
+
+const app = express();
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:'],
+      scriptSrc: ["'self'"],
+      connectSrc: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+}));
+app.use(express.json({ limit: '20kb' }));
+
+// ---------- signed session cookie (stateless, HttpOnly) ----------
+const sign = (data) => crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
+// Token payload: { u: username, role: 'admin' | 'sub', id: sub-admin id, n: display name, exp }
+function issueToken(user) {
+  const info = typeof user === 'string' ? { u: user, role: 'admin' } : user;
+  const payload = Buffer.from(JSON.stringify({ ...info, exp: Date.now() + 8 * 3600 * 1000 })).toString('base64url');
+  return `${payload}.${sign(payload)}`;
+}
+function readToken(req) {
+  const m = (req.headers.cookie || '').match(/(?:^|;\s*)adm=([^;]+)/);
+  if (!m) return null;
+  const [payload, sig] = m[1].split('.');
+  if (!payload || !sig) return null;
+  const expected = sign(payload);
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return data.exp > Date.now() ? data : null;
+  } catch { return null; }
+}
+const cookieOpts = `Path=/; HttpOnly; SameSite=Strict${IS_PROD ? '; Secure' : ''}`;
+
+const deny = (req, res, msg = 'Please log in again.') => (req.path.startsWith('/api/') ? res.status(401).json({ error: msg }) : res.redirect('/admin/login'));
+// Main admin only
+function requireAdmin(req, res, next) {
+  const t = readToken(req);
+  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: 'Admin' }; return next(); }
+  if (t && t.role === 'sub' && !req.path.startsWith('/api/')) return res.redirect('/team');
+  return deny(req, res);
+}
+// Sub-admin (team member) only; re-checks that the account is still active
+async function requireSub(req, res, next) {
+  const t = readToken(req);
+  if (!t) return deny(req, res);
+  if ((t.role || 'admin') === 'admin') return req.path.startsWith('/api/') ? res.status(403).json({ error: 'This area is for sub-admin accounts.' }) : res.redirect('/admin');
+  const u = await db.getUser(t.id);
+  if (!u || !u.active) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
+  req.user = { role: 'sub', id: u.id, name: u.name, username: u.username };
+  next();
+}
+// Extra CSRF guard for state-changing admin calls (on top of SameSite=Strict).
+function requireXhr(req, res, next) {
+  if (req.get('X-Requested-With') === 'fetch') return next();
+  return res.status(403).json({ error: 'Forbidden' });
+}
+
+// ---------- validation ----------
+const clean = (s, max) => String(s ?? '').replace(/[\u0000-\u001F<>]/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
+function validateEnquiry(body) {
+  const errors = {};
+  const student_name = clean(body.student_name, 80);
+  let mobile = String(body.mobile ?? '').replace(/[\s-]/g, '');
+  mobile = mobile.replace(/^(\+91|0091|91(?=\d{10}$)|0(?=\d{10}$))/, '');
+  const email = clean(body.email, 120).toLowerCase();
+  const level = clean(body.level, 4);
+  const programme = clean(body.programme, 30);
+  const branch = clean(body.branch, 60);
+  const city = clean(body.city, 60).replace(/[^A-Za-z\u0900-\u097F .'()-]/g, '');
+
+  if (!/^[A-Za-zऀ-ॿ .'-]{2,80}$/.test(student_name)) errors.student_name = 'Please enter a valid full name.';
+  if (!/^[6-9]\d{9}$/.test(mobile)) errors.mobile = 'Enter a valid 10-digit Indian mobile number.';
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) errors.email = 'Enter a valid email address.';
+  if (!isValid(level, programme, branch || '')) errors.course = branch || !/Tech/.test(programme) ? 'Please choose a programme.' : 'Please choose your branch.';
+  if (city.length < 2) errors.city = 'Please enter your city or district.';
+  if (!body.consent) errors.consent = 'Please accept to be contacted.';
+  const { region } = resolveRegion(city);
+  return { errors, data: { student_name, mobile, email: email || null, level, programme, branch: branch || '', course: courseLabel(programme, branch), city, region } };
+}
+
+// ---------- public routes ----------
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', extensions: ['html'] }));
+
+app.post('/', (_req, res) => res.redirect(303, '/'));
+app.get('/api/config', (_req, res) => res.json({ levels: LEVELS, academicYear: ACADEMIC_YEAR, cities: CITY_SUGGESTIONS, otpRequired: OTP_REQUIRED, chips: chat.CHIPS, contacts: CONTACTS }));
+app.get('/api/region', (req, res) => res.json(resolveRegion(String(req.query.city || '').slice(0, 60))));
+
+// ---------- mobile OTP ----------
+const normMobile = (m) => String(m ?? '').replace(/[\s-]/g, '').replace(/^(\+91|0091|91(?=\d{10}$)|0(?=\d{10}$))/, '');
+const otpHash = (mobile, code) => crypto.createHmac('sha256', SESSION_SECRET).update(`otp:${mobile}:${code}`).digest('hex');
+const OTP_TTL = 5 * 60 * 1000, RESEND_GAP = 30 * 1000, MAX_SENDS = 5, SEND_WINDOW = 60 * 60 * 1000, MAX_TRIES = 5;
+function verifiedToken(mobile) {
+  const payload = Buffer.from(JSON.stringify({ m: mobile, exp: Date.now() + 20 * 60 * 1000 })).toString('base64url');
+  return `${payload}.${sign('v:' + payload)}`;
+}
+function checkVerifiedToken(token, mobile) {
+  const [payload, sig] = String(token || '').split('.');
+  if (!payload || !sig) return false;
+  const exp = sign('v:' + payload);
+  if (sig.length !== exp.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(exp))) return false;
+  try { const d = JSON.parse(Buffer.from(payload, 'base64url').toString()); return d.m === mobile && d.exp > Date.now(); } catch { return false; }
+}
+const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many OTP requests from this network. Please try again later.' } });
+
+app.post('/api/otp/send', otpLimiter, async (req, res) => {
+  try {
+    const mobile = normMobile(req.body.mobile);
+    if (!/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: 'Enter a valid 10-digit Indian mobile number.' });
+    const now = Date.now();
+    const prev = await db.getOtp(mobile);
+    if (prev && now - prev.last_sent < RESEND_GAP) return res.status(429).json({ error: 'Please wait a few seconds before requesting another OTP.', resendIn: Math.ceil((RESEND_GAP - (now - prev.last_sent)) / 1000) });
+    const inWindow = prev && now - prev.window_start < SEND_WINDOW;
+    if (inWindow && prev.sends >= MAX_SENDS) return res.status(429).json({ error: 'OTP limit reached for this number. Please try again after an hour or call the admissions office.' });
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    await db.saveOtp({ mobile, code_hash: otpHash(mobile, code), expires_at: now + OTP_TTL, attempts: 0,
+      sends: inWindow ? prev.sends + 1 : 1, window_start: inWindow ? prev.window_start : now, last_sent: now });
+    const sent = OTP_DEMO ? { ok: true } : await sms.send('otp', mobile, { otp: code });
+    if (!sent.ok) return res.status(502).json({ error: 'Could not send the OTP right now. Please try again in a minute.' });
+    res.json({ ok: true, resendIn: RESEND_GAP / 1000, expiresIn: OTP_TTL / 1000, ...(OTP_DEMO ? { demoOtp: code } : {}) });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+app.post('/api/otp/verify', otpLimiter, async (req, res) => {
+  try {
+    const mobile = normMobile(req.body.mobile);
+    const code = String(req.body.otp || '').replace(/\D/g, '');
+    const rec = await db.getOtp(mobile);
+    if (!rec || !rec.code_hash || rec.expires_at < Date.now()) return res.status(400).json({ error: 'OTP expired. Please request a new one.', expired: true });
+    if (rec.attempts >= MAX_TRIES) return res.status(429).json({ error: 'Too many wrong attempts. Please request a new OTP.', expired: true });
+    const ok = code.length === 6 && crypto.timingSafeEqual(Buffer.from(otpHash(mobile, code)), Buffer.from(rec.code_hash));
+    if (!ok) { await db.bumpOtpAttempts(mobile); return res.status(400).json({ error: `Incorrect OTP. ${MAX_TRIES - rec.attempts - 1} attempt(s) left.` }); }
+    await db.clearOtp(mobile);
+    res.json({ ok: true, token: verifiedToken(mobile) });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+
+// ---------- chatbot ----------
+const chatLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false,
+  message: { reply: 'You are sending messages very fast. Please wait a minute and try again.' } });
+app.post('/api/chat', chatLimiter, async (req, res) => {
+  const text = String(req.body.message || '').slice(0, 500).trim();
+  if (!text) return res.json({ reply: 'Please type a question.', chips: chat.CHIPS });
+  res.json(await chat.answer(text, Array.isArray(req.body.history) ? req.body.history : []));
+});
+
+async function sendConfirmation(row) {
+  if (!SEND_CONFIRMATION) return;
+  const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no });
+  await db.updateEnquiry(row.id, { sms_status: r.ok ? (sms.provider === 'console' ? 'logged' : 'sent') : 'failed' });
+}
+
+const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many submissions from this network. Please try again after some time.' } });
+
+app.post('/api/enquiry', submitLimiter, async (req, res) => {
+  try {
+    if (req.body.website) return res.json({ ok: true, ref_no: 'ADYPU-OK' }); // honeypot: silently drop bots
+    const { errors, data } = validateEnquiry(req.body);
+    if (Object.keys(errors).length) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: errors });
+    const verified = checkVerifiedToken(req.body.otpToken, data.mobile);
+    if (OTP_REQUIRED && !verified) return res.status(401).json({ error: 'Please verify your mobile number with the OTP.', needOtp: true });
+    const dup = await db.findRecentDuplicate(data.mobile, data.course);
+    if (dup) return res.json({ ok: true, ref_no: dup.ref_no, duplicate: true, name: dup.student_name });
+    const row = await db.insertEnquiry({ ...data, mobile_verified: verified });
+    sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
+    res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: SEND_CONFIRMATION });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
+});
+
+// ---------- admin auth ----------
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false,
+  message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
+
+app.get('/admin/login', (_req, res) => res.sendFile(path.join(__dirname, 'views', 'login.html')));
+app.post('/api/admin/login', loginLimiter, requireXhr, async (req, res) => {
+  const { username, password } = req.body || {};
+  const uname = String(username || '').trim();
+  const isMain = uname.length === ADMIN_USER.length && crypto.timingSafeEqual(Buffer.from(uname), Buffer.from(ADMIN_USER));
+  if (isMain) {
+    if (!(await bcrypt.compare(String(password || ''), ADMIN_HASH))) return res.status(401).json({ error: 'Invalid username or password.' });
+    res.setHeader('Set-Cookie', `adm=${issueToken({ u: ADMIN_USER, role: 'admin' })}; Max-Age=28800; ${cookieOpts}`);
+    return res.json({ ok: true, role: 'admin', redirect: '/admin' });
+  }
+  const u = await db.getUserAuth(uname);
+  const ok = await bcrypt.compare(String(password || ''), u ? u.pass_hash : ADMIN_HASH); // compare anyway: same timing
+  if (!u || !ok) return res.status(401).json({ error: 'Invalid username or password.' });
+  if (!Number(u.active)) return res.status(403).json({ error: 'This account is disabled. Please contact the admin.' });
+  await db.touchLogin(u.id);
+  res.setHeader('Set-Cookie', `adm=${issueToken({ u: u.username, role: 'sub', id: u.id, n: u.name })}; Max-Age=28800; ${cookieOpts}`);
+  res.json({ ok: true, role: 'sub', redirect: '/team' });
+});
+app.post('/api/admin/logout', (_req, res) => {
+  res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`);
+  res.json({ ok: true });
+});
+
+app.get('/admin', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'admin.html')));
+app.get('/admin/admin.js', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'admin.js')));
+app.get('/team', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'team.html')));
+app.get('/team/team.js', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'team.js')));
+
+// ---------- sub-admin (team) API ----------
+const teamRow = (row, me) => row && (row.created_by_id === me.id || row.counsellor_id === me.id);
+function teamData(body) {
+  const { errors, data } = validateEnquiry({ ...body, consent: true });
+  const status = STATUSES.includes(body.status) ? body.status : 'New';
+  return { errors, data: { ...data, status, notes: String(body.notes || '').slice(0, 500) } };
+}
+async function pushStudent(body, me, sendSms) {
+  const { errors, data } = teamData(body);
+  if (Object.keys(errors).length) return { errors };
+  const existing = await db.findExisting(data.mobile, data.course);
+  if (existing) return { duplicate: existing };
+  const row = await db.insertEnquiry({ ...data, source: 'subadmin', created_by_id: me.id, created_by_name: me.name, counsellor_id: me.id, counsellor_name: me.name });
+  if (sendSms) await sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
+  return { row };
+}
+const teamFilters = (q, me) => ({ q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir, scopeUser: me.id });
+
+app.get('/api/team/me', requireSub, (req, res) => res.json({ user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider }));
+app.get('/api/team/enquiries', requireSub, async (req, res) => res.json({ rows: await db.listEnquiries(teamFilters(req.query, req.user)) }));
+app.post('/api/team/enquiries', requireSub, requireXhr, async (req, res) => {
+  try {
+    const r = await pushStudent(req.body, req.user, req.body.sendSms !== false);
+    if (r.errors) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: r.errors });
+    if (r.duplicate) return res.status(409).json({ error: `Already in the database as ${r.duplicate.ref_no} (${r.duplicate.student_name}${r.duplicate.created_by_name ? ', pushed by ' + r.duplicate.created_by_name : ', from the website'}).` });
+    res.json({ ok: true, row: await db.getEnquiry(r.row.id) });
+  } catch (e) { console.error(e); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
+});
+app.patch('/api/team/enquiries/:id', requireSub, requireXhr, async (req, res) => {
+  const row = await db.getEnquiry(parseInt(req.params.id, 10));
+  if (!teamRow(row, req.user)) return res.status(404).json({ error: 'Not found' });
+  const upd = {};
+  if (req.body.status !== undefined) { if (!STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Invalid status' }); upd.status = req.body.status; }
+  if (req.body.notes !== undefined) upd.notes = String(req.body.notes).slice(0, 500);
+  res.json({ row: await db.updateEnquiry(row.id, upd) });
+});
+
+// Bulk upload: .xlsx or .csv, first row = headers. Columns are matched by name, in any order.
+const HEAD = { student_name: /^(student )?name|full ?name/, mobile: /mobile|phone|contact/, email: /e-?mail/, city: /city|district/, level: /^level|ug ?\/ ?pg/,
+  programme: /programme|program|course/, branch: /branch|specialis|specializ/, status: /status/, notes: /note|remark/ };
+function parseCsv(text) {
+  const rows = []; let row = [], cell = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += c; }
+    else if (c === '"') q = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter((r) => r.some((x) => String(x).trim()));
+}
+async function readSheet(buf, name) {
+  if (/\.csv$/i.test(name)) return parseCsv(buf.toString('utf8').replace(/^\uFEFF/, ''));
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(buf);
+  const ws = wb.worksheets[0];
+  const out = [];
+  ws.eachRow({ includeEmpty: false }, (r) => out.push((r.values || []).slice(1).map((v) => (v && typeof v === 'object' ? (v.text || v.result || (v.richText ? v.richText.map((t) => t.text).join('') : '')) : v ?? ''))));
+  return out;
+}
+const importLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many uploads. Please wait a few minutes.' } });
+app.post('/api/team/import', requireSub, requireXhr, importLimiter, express.raw({ type: () => true, limit: '3mb' }), async (req, res) => {
+  try {
+    const name = String(req.query.name || 'upload.xlsx');
+    if (!/\.(xlsx|csv)$/i.test(name)) return res.status(400).json({ error: 'Please upload an .xlsx or .csv file.' });
+    const grid = await readSheet(req.body, name);
+    const hi = grid.findIndex((r) => r.some((c) => /name/i.test(String(c))) && r.some((c) => /mobile|phone/i.test(String(c))));
+    if (hi < 0) return res.status(400).json({ error: 'Could not find the header row. Please use the template (Student Name, Mobile, …).' });
+    const head = grid[hi].map((h) => String(h).toLowerCase().trim());
+    const col = Object.fromEntries(Object.entries(HEAD).map(([k, re]) => [k, head.findIndex((h) => re.test(h))]));
+    const body = grid.slice(hi + 1).filter((r) => r.some((c) => String(c).trim()));
+    if (body.length > 1000) return res.status(400).json({ error: 'Please upload at most 1000 students at a time.' });
+    const sendSms = req.query.sms === '1';
+    const result = { added: [], duplicates: [], errors: [] };
+    for (let i = 0; i < body.length; i++) {
+      const r = body[i], g = (k) => (col[k] >= 0 ? String(r[col[k]] ?? '').trim() : '');
+      let level = g('level').toUpperCase(), programme = g('programme'), branch = g('branch');
+      // friendly matching: "btech" → "B.Tech", "Mechanical" → "Mechanical Engineering", missing level inferred
+      const allProgs = [...LEVELS.UG.map((p) => ['UG', p]), ...LEVELS.PG.map((p) => ['PG', p])];
+      const pm = allProgs.find(([, p]) => p.name.toLowerCase().replace(/[^a-z]/g, '') === programme.toLowerCase().replace(/[^a-z]/g, ''));
+      if (pm) { programme = pm[1].name; if (!level) level = pm[0]; }
+      if (pm && pm[1].branches && branch) { const bm = pm[1].branches.find((b) => b.toLowerCase().startsWith(branch.toLowerCase().replace(/ engineering$/, '')) || b.toLowerCase() === branch.toLowerCase()); if (bm) branch = bm; }
+      const st = STATUSES.find((s) => s.toLowerCase() === g('status').toLowerCase());
+      const out = await pushStudent({ student_name: g('student_name'), mobile: g('mobile'), email: g('email'), city: g('city'), level, programme, branch, status: st || 'New', notes: g('notes') }, req.user, sendSms);
+      const line = hi + i + 2;
+      if (out.errors) result.errors.push({ line, name: g('student_name'), problems: Object.values(out.errors) });
+      else if (out.duplicate) result.duplicates.push({ line, name: g('student_name'), ref: out.duplicate.ref_no });
+      else result.added.push({ line, name: out.row.student_name, ref: out.row.ref_no });
+    }
+    res.json({ ok: true, total: body.length, ...result });
+  } catch (e) { console.error(e); res.status(400).json({ error: 'Could not read that file. Please use the template.' }); }
+});
+app.get('/api/team/template.xlsx', requireSub, async (_req, res) => {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Students');
+  ws.columns = [['Student Name', 26], ['Mobile', 14], ['Email', 28], ['City', 16], ['Level', 8], ['Programme', 16], ['Branch', 34], ['Status', 18], ['Notes', 30]].map(([header, width]) => ({ header, width }));
+  ws.getRow(1).eachCell((c) => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } }; });
+  // Examples live on their own sheet so they are never uploaded by mistake (only the first sheet is read).
+  const ex = wb.addWorksheet('Example');
+  ex.columns = ws.columns.map((c) => ({ header: c.header, width: c.width }));
+  ex.getRow(1).font = { bold: true };
+  ex.addRow(['Aarya Patil', '9876543210', 'aarya@example.com', 'Pune', 'UG', 'B.Tech', 'Mechanical Engineering', 'New', 'Met at school fair']);
+  ex.addRow(['Rohan Deshmukh', '8123456789', '', 'Nashik', 'PG', 'MBA', '', 'Contacted', 'Branch is only needed for B.Tech / M.Tech']);
+  const lists = wb.addWorksheet('Lists');
+  const progs = [...LEVELS.UG.map((p) => p.name), ...LEVELS.PG.map((p) => p.name)];
+  const branches = (LEVELS.UG.find((p) => p.branches) || { branches: [] }).branches;
+  lists.getColumn(1).values = ['Level', 'UG', 'PG']; lists.getColumn(2).values = ['Programme', ...progs];
+  lists.getColumn(3).values = ['Branch (B.Tech / M.Tech only)', ...branches]; lists.getColumn(4).values = ['Status', ...STATUSES];
+  [1, 2, 3, 4].forEach((i) => { lists.getColumn(i).width = 34; lists.getCell(1, i).font = { bold: true }; });
+  for (let r = 2; r <= 1001; r++) {
+    ws.getCell(`E${r}`).dataValidation = { type: 'list', allowBlank: true, formulae: ['Lists!$A$2:$A$3'] };
+    ws.getCell(`F${r}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Lists!$B$2:$B$${progs.length + 1}`] };
+    ws.getCell(`G${r}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Lists!$C$2:$C$${branches.length + 1}`] };
+    ws.getCell(`H${r}`).dataValidation = { type: 'list', allowBlank: true, formulae: [`Lists!$D$2:$D$${STATUSES.length + 1}`] };
+    ws.getCell(`B${r}`).numFmt = '@';
+  }
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="ADYPU_Student_Upload_Template.xlsx"');
+  await wb.xlsx.write(res); res.end();
+});
+
+// ---------- main admin: team management ----------
+const genPassword = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; return Array.from(crypto.randomBytes(10), (b) => a[b % a.length]).join(''); };
+app.get('/api/admin/users', requireAdmin, async (_req, res) => {
+  const [users, rows] = await Promise.all([db.listUsers(), db.listEnquiries({})]);
+  const wk = Date.now() - 7 * 864e5;
+  res.json({ users: users.map((u) => {
+    const pushed = rows.filter((r) => r.created_by_id === u.id), assigned = rows.filter((r) => r.counsellor_id === u.id);
+    return { ...u, pushed: pushed.length, pushedWeek: pushed.filter((r) => new Date(r.created_at) > wk).length, assigned: assigned.length,
+      admitted: assigned.filter((r) => r.status === 'Admitted').length, pending: assigned.filter((r) => r.status === 'New').length };
+  }) });
+});
+app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
+  const name = clean(req.body.name, 60), username = clean(req.body.username, 30).toLowerCase(), mobile = String(req.body.mobile || '').replace(/\D/g, '').slice(-10);
+  const password = String(req.body.password || '') || genPassword();
+  if (name.length < 2) return res.status(400).json({ error: 'Please enter the full name.' });
+  if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === ADMIN_USER.toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
+  if (mobile && !/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  if (await db.getUserAuth(username)) return res.status(409).json({ error: 'That username is already taken.' });
+  const user = await db.createUser({ name, username, mobile, pass_hash: await bcrypt.hash(password, 12) });
+  res.json({ ok: true, user, password });
+});
+app.patch('/api/admin/users/:id', requireAdmin, requireXhr, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!(await db.getUser(id))) return res.status(404).json({ error: 'Not found' });
+  const upd = {}; let password;
+  if (req.body.name !== undefined) upd.name = clean(req.body.name, 60);
+  if (req.body.mobile !== undefined) upd.mobile = String(req.body.mobile).replace(/\D/g, '').slice(-10);
+  if (req.body.active !== undefined) upd.active = !!req.body.active;
+  if (req.body.resetPassword) { password = genPassword(); upd.pass_hash = await bcrypt.hash(password, 12); }
+  res.json({ ok: true, user: await db.updateUser(id, upd), password });
+});
+
+// ---------- admin API ----------
+const pickFilters = (q) => ({ pushedBy: q.pushedBy, counsellor: q.counsellor, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, region: q.region, verified: q.verified, from: q.from, to: q.to, sort: q.sort, dir: q.dir });
+
+app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
+  const rows = await db.listEnquiries(pickFilters(req.query));
+  const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active }));
+  res.json({ rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team });
+});
+
+app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const upd = {};
+  if (req.body.status !== undefined) {
+    if (!STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Invalid status' });
+    upd.status = req.body.status;
+  }
+  if (req.body.notes !== undefined) upd.notes = String(req.body.notes).slice(0, 500);
+  if (req.body.counsellor_id !== undefined) {
+    if (req.body.counsellor_id === null || req.body.counsellor_id === '') { upd.counsellor_id = null; upd.counsellor_name = null; }
+    else { const u = await db.getUser(parseInt(req.body.counsellor_id, 10)); if (!u) return res.status(400).json({ error: 'Unknown counsellor' }); upd.counsellor_id = u.id; upd.counsellor_name = u.name; }
+  }
+  res.json({ row: await db.updateEnquiry(id, upd) });
+});
+
+app.post('/api/admin/enquiries/:id/sms', requireAdmin, requireXhr, async (req, res) => {
+  const row = (await db.listEnquiries({})).find((r) => r.id === parseInt(req.params.id, 10));
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no });
+  const out = await db.updateEnquiry(row.id, { sms_status: r.ok ? (sms.provider === 'console' ? 'logged' : 'sent') : 'failed' });
+  res.status(r.ok ? 200 : 502).json({ row: out, ok: r.ok });
+});
+
+app.delete('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res) => {
+  await db.deleteEnquiry(parseInt(req.params.id, 10));
+  res.json({ ok: true });
+});
+
+// ---------- exports ----------
+const fmtIST = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+const stamp = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+function filterLabel(f) {
+  const parts = [];
+  if (f.level) parts.push(`Level: ${f.level}`);
+  if (f.programme) parts.push(`Programme: ${f.programme}`);
+  if (f.branch) parts.push(`Branch: ${f.branch}`);
+  if (f.status) parts.push(`Status: ${f.status}`);
+  if (f.region) parts.push(`Region: ${f.region}`);
+  if (f.verified) parts.push(`Mobile verified: ${f.verified}`);
+  if (f.pushedByName) parts.push(`Pushed by: ${f.pushedByName}`);
+  if (f.counsellorName) parts.push(`Counsellor: ${f.counsellorName}`);
+  if (f.from || f.to) parts.push(`Dates: ${f.from || '…'} to ${f.to || '…'}`);
+  if (f.q) parts.push(`Search: "${f.q}"`);
+  const SORTN = { pushed: 'Pushed by', counsellor: 'Counsellor', date: 'Date', name: 'Name', programme: 'Programme', branch: 'Branch', level: 'Level', region: 'Region', city: 'City', course: 'Course', status: 'Status' };
+  const sortTxt = `Sorted by ${SORTN[f.sort] || 'Date'} (${f.dir === 'asc' ? 'ascending' : 'descending'})`;
+  return (parts.length ? parts.join('  |  ') : 'All enquiries') + '  |  ' + sortTxt;
+}
+async function exportFilters(q) {
+  const f = pickFilters(q);
+  if (f.pushedBy) f.pushedByName = f.pushedBy === 'web' ? 'Website form' : ((await db.getUser(parseInt(f.pushedBy, 10))) || {}).name;
+  if (f.counsellor) f.counsellorName = f.counsellor === 'none' ? 'Unassigned' : ((await db.getUser(parseInt(f.counsellor, 10))) || {}).name;
+  return f;
+}
+function countBy(rows, key) {
+  const m = {};
+  rows.forEach((r) => { m[r[key]] = (m[r[key]] || 0) + 1; });
+  return Object.entries(m).sort((a, b) => b[1] - a[1]);
+}
+const istDay = (iso) => new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+function countByDate(rows) {
+  const m = {};
+  rows.forEach((r) => { const d = istDay(r.created_at); m[d] = (m[d] || 0) + 1; });
+  return Object.entries(m).sort((a, b) => b[0].localeCompare(a[0]));
+}
+
+app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
+  const f = await exportFilters(req.query);
+  const rows = await db.listEnquiries(f);
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'ADYPU Admission Desk';
+  const ws = wb.addWorksheet('Enquiries', { views: [{ state: 'frozen', ySplit: 4 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
+  const cols = [['Sr.', 6], ['Reference No.', 17], ['Student Name', 26], ['Mobile', 14], ['Verified', 9], ['Email', 28], ['City', 16], ['Region', 24], ['Level', 7], ['Programme', 14], ['Branch', 30], ['Status', 17], ['Pushed By', 20], ['Counsellor', 20], ['Notes', 28], ['Submitted On (IST)', 21]];
+  ws.columns = cols.map(([, w]) => ({ width: w }));
+  ws.mergeCells(1, 1, 1, cols.length);
+  ws.getCell('A1').value = `Ajeenkya DY Patil University, Pune — Admission Enquiries ${ACADEMIC_YEAR}`;
+  ws.getCell('A1').font = { bold: true, size: 15, color: { argb: 'FFFFFFFF' } };
+  ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } };
+  ws.getCell('A1').alignment = { vertical: 'middle', horizontal: 'center' };
+  ws.getRow(1).height = 28;
+  ws.mergeCells(2, 1, 2, cols.length);
+  ws.getCell('A2').value = `${filterLabel(f)}   •   Total records: ${rows.length}   •   Generated: ${fmtIST(new Date().toISOString())}`;
+  ws.getCell('A2').font = { italic: true, size: 10, color: { argb: 'FF475569' } };
+  ws.getCell('A2').alignment = { horizontal: 'center' };
+  const head = ws.getRow(4);
+  head.values = cols.map(([h]) => h);
+  head.eachCell((c) => {
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF08A24' } };
+    c.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    c.border = { bottom: { style: 'thin', color: { argb: 'FF0B1F4B' } } };
+  });
+  head.height = 22;
+  rows.forEach((r, i) => {
+    const row = ws.addRow([i + 1, r.ref_no, r.student_name, r.mobile, r.mobile_verified ? 'Yes' : 'No', r.email || '', r.city || '', r.region || '', r.level, r.programme, r.branch || '—', r.status, r.created_by_name || 'Website form', r.counsellor_name || 'Unassigned', r.notes || '', fmtIST(r.created_at)]);
+    row.getCell(4).numFmt = '@';
+    row.eachCell((c) => {
+      c.alignment = { vertical: 'top', wrapText: true };
+      c.border = { bottom: { style: 'hair', color: { argb: 'FFCBD5E1' } } };
+      if (i % 2) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F7FB' } };
+    });
+  });
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: cols.length } };
+
+  const sum = wb.addWorksheet('Summary');
+  sum.columns = [{ width: 36 }, { width: 12 }];
+  sum.addRow(['Admission Enquiry Summary']).font = { bold: true, size: 14 };
+  sum.addRow([filterLabel(f)]).font = { italic: true, color: { argb: 'FF475569' } };
+  sum.addRow([]);
+  const section = (title, data) => {
+    const h = sum.addRow([title, 'Count']);
+    h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    h.eachCell((c) => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } }; });
+    data.forEach(([k, v]) => sum.addRow([k, v]));
+    sum.addRow([]);
+  };
+  section('By level (UG / PG)', countBy(rows, 'level'));
+  section('By programme', countBy(rows, 'programme'));
+  section('By engineering branch', countBy(rows.filter((r) => r.branch), 'branch'));
+  section('By status', countBy(rows, 'status'));
+  section('By pushed by', countBy(rows.map((r) => ({ k: r.created_by_name || 'Website form' })), 'k'));
+  section('By counsellor', countBy(rows.map((r) => ({ k: r.counsellor_name || 'Unassigned' })), 'k'));
+  section('By region', countBy(rows.map((r) => ({ ...r, region: r.region || 'Not given' })), 'region'));
+  section('By date (IST)', countByDate(rows));
+  section('Mobile verified', countBy(rows.map((r) => ({ v: r.mobile_verified ? 'Verified' : 'Not verified' })), 'v'));
+  sum.addRow(['Total', rows.length]).font = { bold: true };
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="ADYPU_Admission_Enquiries_${stamp()}.xlsx"`);
+  await wb.xlsx.write(res);
+  res.end();
+});
+
+app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
+  const f = await exportFilters(req.query);
+  const rows = await db.listEnquiries(f);
+  const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 36, bufferPages: true, info: { Title: 'ADYPU Admission Enquiries', Author: 'ADYPU Admission Desk' } });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="ADYPU_Admission_Enquiries_${stamp()}.pdf"`);
+  doc.pipe(res);
+
+  const NAVY = '#0B1F4B', ORANGE = '#F08A24', GREY = '#475569';
+  const W = doc.page.width, L = 36, R = W - 36;
+  const header = () => {
+    doc.rect(0, 0, W, 64).fill(NAVY);
+    doc.rect(0, 64, W, 4).fill(ORANGE);
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(17).text('Ajeenkya DY Patil University, Pune', L, 16);
+    doc.font('Helvetica').fontSize(10).fillColor('#FFD8A8').text(`Admission Enquiry Report  •  Academic Year ${ACADEMIC_YEAR}`, L, 38);
+    doc.fillColor('#FFFFFF').fontSize(9).text(`Generated: ${fmtIST(new Date().toISOString())}`, L, 22, { width: R - L, align: 'right' });
+  };
+  header();
+  doc.y = 82;
+  doc.fillColor(GREY).font('Helvetica-Oblique').fontSize(9).text(filterLabel(f), L, doc.y);
+
+  // summary tiles
+  const tiles = [['Total enquiries', rows.length], ['UG', rows.filter((r) => r.level === 'UG').length],
+    ['PG', rows.filter((r) => r.level === 'PG').length], ['Admitted', rows.filter((r) => r.status === 'Admitted').length]];
+  const tw = (R - L - 30) / 4, ty = doc.y + 8;
+  tiles.forEach(([k, v], i) => {
+    const x = L + i * (tw + 10);
+    doc.roundedRect(x, ty, tw, 40, 6).fill('#F1F5F9');
+    doc.rect(x, ty, 4, 40).fill(ORANGE);
+    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(16).text(String(v), x + 14, ty + 6);
+    doc.fillColor(GREY).font('Helvetica').fontSize(8.5).text(k, x + 14, ty + 26);
+  });
+  doc.y = ty + 54;
+
+  const cols = [['#', 22], ['Ref. No.', 74], ['Student Name', 112], ['Mobile', 72], ['City / Region', 118], ['Programme', 112], ['Status', 70], ['Pushed by / Counsellor', 110], ['Submitted (IST)', 80]];
+  const drawHead = () => {
+    const y = doc.y;
+    doc.rect(L, y, R - L, 20).fill(NAVY);
+    let x = L;
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(8.5);
+    cols.forEach(([h, w]) => { doc.text(h, x + 4, y + 6, { width: w - 8 }); x += w; });
+    doc.y = y + 20;
+  };
+  drawHead();
+  doc.font('Helvetica').fontSize(8.5);
+  rows.forEach((r, i) => {
+    const vals = [i + 1, r.ref_no, r.student_name, `${r.mobile}${r.mobile_verified ? '  (verified)' : ''}`, r.city ? `${r.city}\n${r.region || ''}` : '—', `${r.level} · ${r.programme}${r.branch ? '\n' + r.branch : ''}`, r.status, `${r.created_by_name || 'Website'}\n→ ${r.counsellor_name || 'Unassigned'}`, fmtIST(r.created_at)];
+    const h = Math.max(18, ...vals.map((v, k) => doc.heightOfString(String(v), { width: cols[k][1] - 8 }) + 8));
+    if (doc.y + h > doc.page.height - 50) { doc.addPage(); header(); doc.y = 82; drawHead(); doc.font('Helvetica').fontSize(8.5); }
+    const y = doc.y;
+    if (i % 2) doc.rect(L, y, R - L, h).fill('#F5F7FB');
+    let x = L;
+    doc.fillColor('#0F172A');
+    vals.forEach((v, k) => { doc.text(String(v), x + 4, y + 4, { width: cols[k][1] - 8 }); x += cols[k][1]; });
+    doc.moveTo(L, y + h).lineTo(R, y + h).lineWidth(0.3).strokeColor('#CBD5E1').stroke();
+    doc.y = y + h;
+  });
+  if (!rows.length) doc.fillColor(GREY).text('No enquiries match the selected filters.', L, doc.y + 10);
+
+  // region-wise and date-wise summary, side by side
+  if (rows.length) {
+    const regions = countBy(rows.map((r) => ({ region: r.region || 'Not given' })), 'region').slice(0, 12);
+    const dates = countByDate(rows).slice(0, 12);
+    const need = 40 + Math.max(regions.length, dates.length) * 15;
+    if (doc.y + need > doc.page.height - 120) { doc.addPage(); header(); doc.y = 90; }
+    const y0 = doc.y + 18, half = (R - L - 30) / 2;
+    const block = (x, title, data) => {
+      doc.rect(x, y0, half, 18).fill(NAVY);
+      doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(9).text(title, x + 6, y0 + 5, { width: half - 60 }).text('Count', x + half - 50, y0 + 5, { width: 44, align: 'right' });
+      const max = Math.max(...data.map((d) => d[1]), 1);
+      data.forEach(([k, v], i) => {
+        const y = y0 + 22 + i * 15;
+        doc.rect(x + half - 150, y + 2, 92 * (v / max), 8).fill('#F6B26B');
+        doc.fillColor('#0F172A').font('Helvetica').fontSize(8.5).text(k, x + 6, y + 1, { width: half - 170, lineBreak: false, ellipsis: true })
+          .text(String(v), x + half - 50, y + 1, { width: 44, align: 'right' });
+      });
+    };
+    block(L, 'Region-wise enquiries', regions);
+    block(L + half + 30, 'Date-wise enquiries (IST)', dates);
+    doc.y = y0 + 26 + Math.max(regions.length, dates.length) * 15;
+  }
+
+  // signature block on last page
+  if (doc.y + 70 > doc.page.height - 50) { doc.addPage(); header(); doc.y = 90; }
+  const sy = doc.y + 36;
+  doc.strokeColor('#94A3B8').lineWidth(0.6).moveTo(L, sy).lineTo(L + 170, sy).stroke().moveTo(R - 170, sy).lineTo(R, sy).stroke();
+  doc.fillColor(GREY).fontSize(9).text('Prepared by (Admission Desk)', L, sy + 4, { width: 170 })
+    .text('Verified by (Authorised Signatory)', R - 170, sy + 4, { width: 170, align: 'right' });
+
+  const range = doc.bufferedPageRange();
+  for (let p = range.start; p < range.start + range.count; p++) {
+    doc.switchToPage(p);
+    doc.page.margins.bottom = 0;
+    doc.fillColor('#94A3B8').fontSize(8).text(`D Y Patil Knowledge City, Charholi Bk., Via Lohegaon, Pune – 411081   •   Page ${p + 1} of ${range.count}`,
+      L, doc.page.height - 30, { width: R - L, align: 'center', lineBreak: false });
+  }
+  doc.end();
+});
+
+app.get('/healthz', (_req, res) => res.send('ok'));
+app.use((_req, res) => res.redirect('/'));
+
+db.init().then(() => app.listen(PORT, () => console.log(`ADYPU admission portal running on http://localhost:${PORT}`)))
+  .catch((e) => { console.error('DB init failed', e); process.exit(1); });

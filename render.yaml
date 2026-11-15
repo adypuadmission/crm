@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: adypu-admission
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: ACADEMIC_YEAR
+        value: "2027–28"
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SMS_PROVIDER
+        value: console
+      - key: OTP_REQUIRED
+        value: "true"
+      - key: SEND_CONFIRMATION_SMS
+        value: "true"
+      - key: MSG91_AUTH_KEY
+        sync: false
+      - key: MSG91_OTP_TEMPLATE_ID
+        sync: false
+      - key: MSG91_CONFIRM_TEMPLATE_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: adypu-admission-db
+          property: connectionString
+databases:
+  - name: adypu-admission-db
+    plan: free

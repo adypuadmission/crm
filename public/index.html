@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admission Enquiry | Ajeenkya DY Patil University, Pune</title>
+<meta name="description" content="Register your interest for B.Tech, MBA, MCA, Law, Design and Hotel Management at Ajeenkya DY Patil University, Pune.">
+<meta name="theme-color" content="#0B1F4B">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230B1F4B'/%3E%3Cpath d='M32 12 52 22 32 32 12 22Z' fill='%23F08A24'/%3E%3Cpath d='M20 27v10c0 4 6 8 12 8s12-4 12-8V27l-12 6Z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="page">
+
+  <!-- ===== Left: inspiration panel ===== -->
+  <section class="hero" aria-label="About ADYPU">
+    <div class="orb orb-a"></div><div class="orb orb-b"></div>
+    <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+      <defs><path id="circ" d="M100,100 m-78,0 a78,78 0 1,1 156,0 a78,78 0 1,1 -156,0"/></defs>
+      <text><textPath href="#circ">UNLOCK YOUR POTENTIAL • RISE ABOVE • SCRIPT YOUR OWN SUCCESS STORY • </textPath></text>
+    </svg>
+
+    <header class="brand">
+      <div class="crest" aria-hidden="true">
+        <svg viewBox="0 0 64 64"><path d="M32 10 54 21 32 32 10 21Z" fill="#F08A24"/><path d="M19 26v11c0 5 6 9 13 9s13-4 13-9V26l-13 6.5Z" fill="#fff"/><path d="M52 22v14" stroke="#F08A24" stroke-width="3" stroke-linecap="round"/><circle cx="52" cy="38" r="3" fill="#F08A24"/></svg>
+      </div>
+      <div>
+        <div class="brand-name">Ajeenkya DY Patil University</div>
+        <div class="brand-sub">D Y Patil Knowledge City · Pune</div>
+      </div>
+    </header>
+
+    <div class="hero-body">
+      <span class="pill"><span class="dot"></span> Admissions Open <b id="ay">2027–28</b></span>
+      <h1>Your next chapter<br><em>begins here.</em></h1>
+      <p class="lead">Fostering a generation of innovators — tell us what you dream of building, and our admission team will guide you every step of the way.</p>
+
+      <div class="quote" aria-live="polite">
+        <span class="q-mark">“</span>
+        <p id="quote">The future belongs to those who prepare for it today.</p>
+      </div>
+
+      <ul class="perks">
+        <li><span>🎓</span>10 Schools · 2 Centres of study</li>
+        <li><span>🧭</span>Free one-to-one counselling</li>
+        <li><span>🌏</span>Prepared for the global market</li>
+      </ul>
+    </div>
+
+    <div class="help-card" id="helpCard">
+      <p class="help-t">📞 For further connection &amp; queries</p>
+      <div class="help-list" id="helpContacts">
+        <div class="hc"><div class="hc-av">MA</div><div class="hc-n"><b>Dr. Maqsood Ahmed Ansari</b><a href="tel:+919822070363">+91 98220 70363</a></div><a class="hc-btn call" href="tel:+919822070363" aria-label="Call">📞</a><a class="hc-btn wa" href="https://wa.me/919822070363" target="_blank" rel="noopener" aria-label="WhatsApp">💬</a></div>
+        <div class="hc"><div class="hc-av">RG</div><div class="hc-n"><b>Mrs. Rebekah Gaware</b><a href="tel:+917773900773">+91 77739 00773</a></div><a class="hc-btn call" href="tel:+917773900773" aria-label="Call">📞</a><a class="hc-btn wa" href="https://wa.me/917773900773" target="_blank" rel="noopener" aria-label="WhatsApp">💬</a></div>
+      </div>
+    </div>
+
+    <footer class="hero-foot">
+      <span>📞 Engineering helpline: <a href="tel:+918956487911">+91 89564 87911</a></span>
+      <span>✉️ <a href="mailto:info@adypu.edu.in">info@adypu.edu.in</a></span>
+    </footer>
+  </section>
+
+  <!-- ===== Right: form ===== -->
+  <main class="panel">
+    <div class="card" id="formCard">
+      <div class="card-head">
+        <p class="eyebrow">Admission Enquiry</p>
+        <h2>Begin your journey</h2>
+        <p class="muted">Takes less than a minute. Fields marked <span class="req">*</span> are required.</p>
+        <div class="progress" aria-hidden="true"><div class="bar" id="bar"></div></div>
+        <p class="progress-txt" id="progressTxt">Let's get started ✨</p>
+      </div>
+
+      <form id="enquiryForm" method="post" action="/" novalidate autocomplete="on">
+        <!-- honeypot for bots: hidden from people -->
+        <div class="hp" aria-hidden="true"><label>Website <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+
+        <div class="field">
+          <label for="student_name">Student name <span class="req">*</span></label>
+          <input id="student_name" name="student_name" type="text" placeholder="e.g. Aarya Patil" maxlength="80" required autocomplete="name">
+          <small class="err" data-for="student_name"></small>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="mobile">Mobile number <span class="req">*</span></label>
+            <div class="prefix-wrap"><span class="prefix">+91</span>
+              <input id="mobile" name="mobile" type="tel" inputmode="numeric" placeholder="98XXXXXXXX" maxlength="10" required autocomplete="tel-national">
+              <button type="button" class="verify-btn" id="verifyBtn" hidden>Verify</button>
+              <span class="verified-chip" id="verifiedChip" hidden>✓ Verified</span>
+            </div>
+            <small class="err" data-for="mobile"></small>
+          </div>
+          <div class="field">
+            <label for="email">Email <span class="opt">(optional)</span></label>
+            <input id="email" name="email" type="email" placeholder="you@example.com" maxlength="120" autocomplete="email">
+            <small class="err" data-for="email"></small>
+          </div>
+        </div>
+
+        <div class="otp-box" id="otpBox" hidden>
+          <div class="otp-head"><span class="otp-ic">📩</span><div><b>Enter the 6-digit OTP</b><small id="otpSentTo">Sent to +91 ——</small></div></div>
+          <div class="otp-inputs" id="otpInputs">
+            <input inputmode="numeric" maxlength="1" aria-label="OTP digit 1" autocomplete="one-time-code"><input inputmode="numeric" maxlength="1" aria-label="OTP digit 2"><input inputmode="numeric" maxlength="1" aria-label="OTP digit 3"><input inputmode="numeric" maxlength="1" aria-label="OTP digit 4"><input inputmode="numeric" maxlength="1" aria-label="OTP digit 5"><input inputmode="numeric" maxlength="1" aria-label="OTP digit 6">
+          </div>
+          <div class="otp-foot"><span id="otpTimer">Resend in 30s</span><button type="button" class="linkbtn" id="resendBtn" disabled>Resend OTP</button><button type="button" class="linkbtn" id="changeNum">Change number</button></div>
+          <p class="otp-demo" id="otpDemo" hidden></p>
+          <small class="err" id="otpErr"></small>
+        </div>
+
+        <div class="field">
+          <label for="city">City / District <span class="req">*</span></label>
+          <div class="city-wrap">
+            <input id="city" name="city" type="text" list="cityList" placeholder="e.g. Pune, Nashik, Nagpur, Hyderabad" maxlength="60" autocomplete="address-level2">
+            <span class="region-badge" id="regionBadge" hidden></span>
+          </div>
+          <datalist id="cityList"></datalist>
+          <small class="err" data-for="city"></small>
+        </div>
+
+        <div class="field">
+          <label>Preferred programme <span class="req">*</span></label>
+          <div class="seg" role="tablist" data-active="UG">
+            <button type="button" class="seg-btn active" data-level="UG" role="tab" aria-selected="true">🎓 UG <span class="seg-sub">Undergraduate</span></button>
+            <button type="button" class="seg-btn" data-level="PG" role="tab" aria-selected="false">🏅 PG <span class="seg-sub">Postgraduate</span></button>
+            <span class="seg-glider"></span>
+          </div>
+          <div class="progs" id="progs" role="radiogroup" aria-label="Programme"></div>
+          <div class="branch-wrap" id="branchWrap" hidden>
+            <p class="sublabel"><span id="branchTitle">Choose your B.Tech branch</span> <span class="req">*</span></p>
+            <div class="courses" id="courses" role="radiogroup" aria-label="Branch"></div>
+          </div>
+          <small class="err" data-for="course"></small>
+        </div>
+
+        <label class="consent">
+          <input type="checkbox" id="consent" name="consent">
+          <span>I agree to be contacted by ADYPU's admission team by call, SMS, WhatsApp or email about my enquiry.</span>
+        </label>
+        <small class="err" data-for="consent"></small>
+
+        <button class="cta" type="submit" id="submitBtn">
+          <span class="cta-txt">Start my journey</span><span class="arrow">→</span>
+        </button>
+        <p class="formmsg" id="formMsg" role="alert"></p>
+        <p class="secure">🔒 Your details are stored securely and used only for admission counselling.</p>
+      </form>
+    </div>
+
+    <div class="card success hidden" id="successCard" aria-live="polite">
+      <canvas id="confetti" aria-hidden="true"></canvas>
+      <div class="tick">✓</div>
+      <h2 id="successTitle">You're on your way!</h2>
+      <p class="muted" id="successMsg">Our admission counsellor will reach out to you shortly.</p>
+      <div class="refbox"><span>Your reference number</span><strong id="refNo">—</strong></div>
+      <p class="muted small">Please keep this number handy when our team contacts you.</p>
+      <p class="sms-note" id="smsNote" hidden></p>
+      <div class="succ-help"><p>Questions? Talk to us directly:</p><div class="help-list light" id="successContacts">
+        <div class="hc"><div class="hc-av">MA</div><div class="hc-n"><b>Dr. Maqsood Ahmed Ansari</b><a href="tel:+919822070363">+91 98220 70363</a></div><a class="hc-btn call" href="tel:+919822070363" aria-label="Call">📞</a><a class="hc-btn wa" href="https://wa.me/919822070363" target="_blank" rel="noopener" aria-label="WhatsApp">💬</a></div>
+        <div class="hc"><div class="hc-av">RG</div><div class="hc-n"><b>Mrs. Rebekah Gaware</b><a href="tel:+917773900773">+91 77739 00773</a></div><a class="hc-btn call" href="tel:+917773900773" aria-label="Call">📞</a><a class="hc-btn wa" href="https://wa.me/917773900773" target="_blank" rel="noopener" aria-label="WhatsApp">💬</a></div>
+      </div></div>
+      <button class="ghost" id="againBtn" type="button">Submit another enquiry</button>
+    </div>
+  </main>
+</div>
+<!-- ===== Ask ADYPU chatbot ===== -->
+<button class="chat-fab" id="chatFab" aria-label="Open Ask ADYPU chat" aria-expanded="false">
+  <span class="fab-ic">💬</span><span class="fab-txt">Ask ADYPU</span><span class="fab-ping"></span>
+</button>
+<section class="chat" id="chat" aria-label="Ask ADYPU chat" hidden>
+  <header class="chat-head">
+    <div class="chat-av">🎓</div>
+    <div><b>Ask ADYPU</b><small><span class="online"></span> Admission assistant · replies instantly</small></div>
+    <button class="chat-x" id="chatClose" aria-label="Close chat">✕</button>
+  </header>
+  <div class="chat-body" id="chatBody" aria-live="polite"></div>
+  <div class="chat-chips" id="chatChips"></div>
+  <form class="chat-input" id="chatForm" autocomplete="off">
+    <input id="chatText" placeholder="Ask about programmes, fees, hostel…" maxlength="500" aria-label="Type your question">
+    <button type="submit" aria-label="Send">➤</button>
+  </form>
+</section>
+
+<script src="/app.js"></script>
+<script src="/chat.js"></script>
+</body>
+</html>

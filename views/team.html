@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Counsellor Workspace | ADYPU</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin.css">
+</head>
+<body class="team-body">
+<header class="topbar">
+  <div class="tb-brand"><span class="crest sm">🧑‍🏫</span><div><b>Counsellor Workspace</b><small>Ajeenkya DY Patil University, Pune · sub-admin</small></div></div>
+  <div class="tb-actions">
+    <span class="me-chip" id="meChip">…</span>
+    <button class="btn ghost" id="logout">Log out</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hello">
+    <div><h1 id="hello">Welcome!</h1><p class="muted">Add your students here. They appear instantly in the main admin dashboard under your name.</p></div>
+  </section>
+  <section class="kpis team-kpis" id="kpis"></section>
+
+  <div class="grid g-2">
+    <article class="card">
+      <header class="ch"><div><b>➕ Add a student</b><small>One student at a time. The reference number is created instantly.</small></div></header>
+      <form id="addForm" class="tform" novalidate autocomplete="off">
+        <div class="tf-row">
+          <label>Student name *<input name="student_name" maxlength="80" placeholder="e.g. Aarya Patil"></label>
+          <label>Mobile *<input name="mobile" inputmode="numeric" maxlength="10" placeholder="10-digit mobile"></label>
+        </div>
+        <div class="tf-row">
+          <label>Email<input name="email" type="email" maxlength="120" placeholder="optional"></label>
+          <label>City / District *<input name="city" list="cityList" maxlength="60" placeholder="e.g. Pune"></label>
+        </div>
+        <datalist id="cityList"></datalist>
+        <div class="tf-row three">
+          <label>Level *<select name="level"><option>UG</option><option>PG</option></select></label>
+          <label>Programme *<select name="programme"></select></label>
+          <label>Branch<select name="branch"></select></label>
+        </div>
+        <div class="tf-row">
+          <label>Status<select name="status"></select></label>
+          <label>Notes<input name="notes" maxlength="500" placeholder="e.g. Met at school fair"></label>
+        </div>
+        <label class="chk"><input type="checkbox" name="sendSms" checked> Send confirmation SMS to the student</label>
+        <button class="btn primary wide" type="submit" id="addBtn">Add student</button>
+        <p class="aerr" id="addMsg" role="alert"></p>
+      </form>
+    </article>
+
+    <article class="card">
+      <header class="ch"><div><b>📤 Bulk upload</b><small>Excel (.xlsx) or CSV, up to 1000 students per file.</small></div>
+        <a class="mini" href="/api/team/template.xlsx" id="tplBtn">⬇ Template</a></header>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".xlsx,.csv" hidden>
+        <span class="drop-ic">📄</span>
+        <b>Drop your Excel / CSV here</b>
+        <small>or click to choose a file</small>
+        <span class="drop-name" id="dropName"></span>
+      </label>
+      <label class="chk"><input type="checkbox" id="bulkSms"> Send confirmation SMS to every new student</label>
+      <button class="btn primary wide" id="uploadBtn" disabled>Upload students</button>
+      <div class="result" id="result" hidden></div>
+      <p class="cc-hint">Columns: Student Name, Mobile, Email, City, Level, Programme, Branch, Status, Notes. Students already in the database (same mobile + programme) are skipped.</p>
+    </article>
+  </div>
+
+  <section class="panel">
+    <div class="tbl-top">
+      <div><b class="sec-t">👩‍🎓 My students</b> <span class="muted small" id="hint"></span></div>
+      <div class="t-filters">
+        <input id="q" type="search" placeholder="🔍 Search name, mobile, city…">
+        <select id="fStatus"><option value="">All statuses</option></select>
+        <label class="date">From <input type="date" id="from"></label>
+        <label class="date">To <input type="date" id="to"></label>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Ref. No.</th><th>Student</th><th>Contact</th><th>City</th><th>Programme</th><th>Status</th><th>Notes</th><th>Source</th><th>Added</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+<script src="/team/team.js"></script>
+</body>
+</html>

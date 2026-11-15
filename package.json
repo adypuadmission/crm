@@ -1,0 +1,27 @@
+{
+  "name": "adypu-admission-portal",
+  "version": "1.0.0",
+  "description": "ADYPU admission enquiry form with secure admin dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "hash-password": "node -e \"console.log(require('bcryptjs').hashSync(process.argv[1],12))\""
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^18.0.10",
+    "exceljs": "^4.4.0",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
+    "helmet": "^8.3.0",
+    "pdfkit": "^0.20.2",
+    "pg": "^8.23.1"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "private": true,
+  "optionalDependencies": {
+    "better-sqlite3": "^13.1.1"
+  }
+}

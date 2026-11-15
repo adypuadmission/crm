@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Admission Command Centre | ADYPU</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="tb-brand"><span class="crest sm">🎓</span><div><b>Admission Command Centre</b><small>Ajeenkya DY Patil University, Pune · <span id="liveClock"></span></small></div></div>
+  <nav class="tabs" role="tablist">
+    <button class="tab on" data-tab="insights" role="tab" aria-selected="true">📊 Insights</button>
+    <button class="tab" data-tab="table" role="tab" aria-selected="false">📋 Enquiries <span class="tab-count" id="tabCount">0</span></button>
+    <button class="tab" data-tab="team" role="tab" aria-selected="false">👥 Team</button>
+  </nav>
+  <div class="tb-actions">
+    <span class="sms-pill" id="smsPill" title="SMS provider"></span>
+    <a class="btn ghost" href="/" target="_blank" rel="noopener">View form ↗</a>
+    <button class="btn ghost" id="logout">Log out</button>
+  </div>
+</header>
+
+<!-- ===== shared filter bar ===== -->
+<section class="cmdbar">
+  <div class="cmd-row">
+    <div class="lvl" id="lvlSeg" role="group" aria-label="Level">
+      <button data-level="" class="on">All</button><button data-level="UG">🎓 UG</button><button data-level="PG">🏅 PG</button>
+    </div>
+    <select id="programme" aria-label="Programme"><option value="">All programmes</option></select>
+    <select id="branch" aria-label="Branch"><option value="">All branches</option></select>
+    <select id="region" aria-label="Region"><option value="">All regions</option></select>
+    <select id="status" aria-label="Status"><option value="">All statuses</option></select>
+    <select id="verified" aria-label="Verified"><option value="">Verified + unverified</option><option value="yes">✓ Mobile verified</option><option value="no">Not verified</option></select>
+    <select id="pushedBy" aria-label="Pushed by"><option value="">All sources</option><option value="web">🌐 Website form</option></select>
+    <select id="counsellor" aria-label="Counsellor"><option value="">All counsellors</option><option value="none">⚠ Unassigned</option></select>
+    <input id="q" type="search" placeholder="🔍 Name, mobile, city, ref…">
+  </div>
+  <div class="cmd-row">
+    <div class="presets" id="presets" role="group" aria-label="Date range">
+      <button data-p="today">Today</button><button data-p="7">7 days</button><button data-p="30">30 days</button><button data-p="all" class="on">All time</button>
+    </div>
+    <label class="date">From <input type="date" id="from"></label>
+    <label class="date">To <input type="date" id="to"></label>
+    <div class="chips-row" id="activeChips"></div>
+    <span class="spacer"></span>
+    <button class="btn ghost" id="reset">↺ Reset</button>
+    <a class="btn excel" id="xlsx">⬇ Excel</a>
+    <a class="btn pdf" id="pdf">⬇ PDF</a>
+  </div>
+</section>
+
+<main class="wrap">
+  <!-- ===================== INSIGHTS ===================== -->
+  <section id="tab-insights" class="tabpane">
+    <div class="kpis" id="kpis"></div>
+    <div class="insights" id="insights"></div>
+
+    <div class="grid g-2">
+      <article class="card">
+        <header class="ch"><div><b>🧭 Programme explorer</b><small>Level → Programme → Branch. Click a ring to drill in.</small></div><button class="mini" id="sbReset" hidden>⤺ Back out</button></header>
+        <div class="sb-wrap"><svg id="sunburst" viewBox="0 0 360 360" role="img" aria-label="Programme sunburst"></svg><div class="sb-legend" id="sbLegend"></div></div>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>🪜 Admission funnel</b><small>How far students have moved. Click a stage to list them.</small></div></header>
+        <div id="funnel" class="funnel"></div>
+      </article>
+    </div>
+
+    <div class="grid g-2">
+      <article class="card">
+        <header class="ch"><div><b>🗺️ Where students come from</b><small>Maharashtra divisions laid out like the map · click to filter</small></div></header>
+        <div class="map-wrap"><svg id="mhmap" viewBox="0 0 520 300" role="img" aria-label="Maharashtra division map"></svg><div class="outside" id="outside"></div></div>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>📈 Enquiry trend</b><small>Daily enquiries, UG vs PG · click a day to filter</small></div>
+          <div class="seg-mini" id="trendRange"><button data-days="7">7d</button><button data-days="14" class="on">14d</button><button data-days="30">30d</button></div></header>
+        <svg id="trend" viewBox="0 0 560 250" role="img" aria-label="Daily enquiry trend"></svg>
+      </article>
+    </div>
+
+    <article class="card">
+      <header class="ch"><div><b>👥 Team performance</b><small>Students pushed by each sub-admin, and how many reached admission. Click a person to filter.</small></div></header>
+      <div class="perf" id="perf"></div>
+    </article>
+
+    <div class="grid g-2b">
+      <article class="card">
+        <header class="ch"><div><b>⏰ Best time to call</b><small>When students submit enquiries (IST). Darker means busier.</small></div></header>
+        <svg id="heatmap" viewBox="0 0 560 250" role="img" aria-label="Day and time heatmap"></svg>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>🏆 Branch leaderboard</b><small>B.Tech + M.Tech demand by branch · click to filter</small></div></header>
+        <div id="leader" class="leader"></div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ===================== TABLE ===================== -->
+  <section id="tab-table" class="tabpane" hidden>
+    <section class="panel">
+      <div class="tbl-top">
+        <p class="hint" id="hint"></p>
+        <select id="sortSel" aria-label="Sort by">
+          <option value="date:desc">Sort: Newest first</option><option value="date:asc">Sort: Oldest first</option>
+          <option value="region:asc">Sort: Region A→Z</option><option value="city:asc">Sort: City A→Z</option>
+          <option value="programme:asc">Sort: Programme</option><option value="branch:asc">Sort: Branch</option>
+          <option value="name:asc">Sort: Name A→Z</option><option value="status:asc">Sort: Status</option>
+          <option value="pushed:asc">Sort: Pushed by</option><option value="counsellor:asc">Sort: Counsellor</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Ref. No.</th>
+            <th class="sortable" data-sort="name">Student</th>
+            <th>Contact</th>
+            <th class="sortable" data-sort="region">City / Region</th>
+            <th class="sortable" data-sort="programme">Programme / Branch</th>
+            <th class="sortable" data-sort="pushed">Pushed by</th>
+            <th class="sortable" data-sort="counsellor">Counsellor</th>
+            <th class="sortable" data-sort="status">Status</th>
+            <th>Notes</th>
+            <th class="sortable" data-sort="date">Submitted</th>
+            <th>SMS</th><th></th>
+          </tr></thead>
+          <tbody id="rows"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </section>
+  <!-- ===================== TEAM ===================== -->
+  <section id="tab-team" class="tabpane" hidden>
+    <div class="team-grid">
+      <article class="card">
+        <header class="ch"><div><b>➕ Create a sub-admin</b><small>Counsellors and partners who push student data. They see only their own students.</small></div></header>
+        <form id="userForm" class="tform" novalidate autocomplete="off">
+          <label>Full name *<input name="name" maxlength="60" placeholder="e.g. Mrs. Rebekah Gaware"></label>
+          <label>Username *<input name="username" maxlength="30" placeholder="e.g. rebekah"></label>
+          <label>Mobile<input name="mobile" inputmode="numeric" maxlength="10" placeholder="optional"></label>
+          <label>Password<input name="password" type="text" maxlength="60" placeholder="leave empty to auto-generate"></label>
+          <button class="btn primary wide" type="submit">Create account</button>
+          <p class="aerr" id="userMsg" role="alert"></p>
+        </form>
+        <div class="pw-box" id="pwBox" hidden></div>
+        <p class="cc-hint">Share the username, password and the login link <b>/admin/login</b> with the person. They can change nothing outside their own students.</p>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>👥 Sub-admins</b><small id="teamSum"></small></div></header>
+        <div class="members" id="members"><p class="muted small">Loading…</p></div>
+      </article>
+    </div>
+  </section>
+</main>
+<div class="tip" id="tip" hidden></div>
+<div class="toast" id="toast"></div>
+<script src="/admin/admin.js"></script>
+</body>
+</html>
