@@ -29,21 +29,27 @@ services:
         sync: false
       - key: FAST2SMS_CONFIRM_ROUTE
         value: q
-      # WhatsApp (Meta Cloud API) from 9960889772 — students get OTP + confirmation on WhatsApp, SMS is the fallback
+      # WhatsApp (Meta Cloud API) from the ADMISSION OFFICE number — students get OTP + confirmation naming their counsellor; SMS is the fallback
       - key: MESSAGE_CHANNEL
         value: whatsapp
       - key: WA_TOKEN            # permanent System User access token from Meta Business
         sync: false
       - key: WA_PHONE_NUMBER_ID  # from WhatsApp Manager → API setup (not the mobile number)
         sync: false
+      - key: WA_SENDER_MOBILE    # the office WhatsApp number used for sending (10 digits)
+        sync: false
+      - key: WA_ALERT_TEMPLATE   # Utility template with {{1}} = alert text → security alerts to the admin on WhatsApp
+        value: adypu_security_alert
       - key: WA_OTP_TEMPLATE
         value: adypu_otp
       - key: WA_CONFIRM_TEMPLATE
         value: adypu_enquiry_confirm
       - key: ALERT_EMAIL_TO
         sync: false
-      - key: SMTP_HOST
-        sync: false
+      - key: SMTP_HOST           # Gmail: use an App Password in SMTP_PASS
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
       - key: SMTP_USER
         sync: false
       - key: SMTP_PASS

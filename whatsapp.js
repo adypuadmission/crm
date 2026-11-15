@@ -3,11 +3,11 @@
 // while this server sends OTPs and confirmations from the same number.
 // Business-initiated WhatsApp messages must use templates approved by Meta (WhatsApp Manager → Message templates):
 //   WA_OTP_TEMPLATE      category AUTHENTICATION, with a "Copy code" button        (Meta writes the text: "{{1}} is your verification code.")
-//   WA_CONFIRM_TEMPLATE  category UTILITY, body with 3 variables: {{1}} name, {{2}} programme, {{3}} reference number
+//   WA_CONFIRM_TEMPLATE  category UTILITY, 5 variables: {{1}} name, {{2}} programme, {{3}} reference no., {{4}} counsellor name, {{5}} counsellor mobile
 const env = (k, d = '') => process.env[k] || d;
 const TOKEN = env('WA_TOKEN'), PHONE_ID = env('WA_PHONE_NUMBER_ID');
 const enabled = !!(TOKEN && PHONE_ID);
-const OWN = String(env('WA_SENDER_MOBILE', process.env.ADMIN_MOBILE || '9960889772')).replace(/\D/g, '').slice(-10);
+const OWN = String(env('WA_SENDER_MOBILE', '')).replace(/\D/g, '').slice(-10);
 
 async function send(kind, mobile, data) {
   if (!enabled) return { ok: false, detail: 'WhatsApp not configured' };
@@ -17,7 +17,7 @@ async function send(kind, mobile, data) {
     { type: 'body', parameters: [{ type: 'text', text: String(data.otp) }] },
     { type: 'button', sub_type: 'url', index: '0', parameters: [{ type: 'text', text: String(data.otp) }] }] };
   else if (kind === 'confirm' && env('WA_CONFIRM_TEMPLATE')) template = { name: env('WA_CONFIRM_TEMPLATE'), language: { code: env('WA_CONFIRM_LANG', 'en') }, components: [
-    { type: 'body', parameters: [data.first, data.course, data.ref].map((t) => ({ type: 'text', text: String(t || '-').replace(/\s+/g, ' ') })) }] };
+    { type: 'body', parameters: [data.first, data.course, data.ref, data.cname || 'Dr. Maqsood Ahmed Ansari', data.cphone || '9822070363'].map((t) => ({ type: 'text', text: String(t || '-').replace(/\s+/g, ' ') })) }] };
   else if (kind === 'alert' && env('WA_ALERT_TEMPLATE')) template = { name: env('WA_ALERT_TEMPLATE'), language: { code: env('WA_ALERT_LANG', 'en') }, components: [
     { type: 'body', parameters: [{ type: 'text', text: String(data.text).replace(/\s+/g, ' ').slice(0, 300) }] }] };
   if (!template) return { ok: false, detail: `no WhatsApp template set for ${kind}` };

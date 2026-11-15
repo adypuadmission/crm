@@ -141,7 +141,7 @@
         <form id="userForm" class="tform" novalidate autocomplete="off">
           <label>Full name *<input name="name" maxlength="60" placeholder="e.g. Mrs. Rebekah Gaware"></label>
           <label>Username *<input name="username" maxlength="30" placeholder="e.g. rebekah"></label>
-          <label>Mobile<input name="mobile" inputmode="numeric" maxlength="10" placeholder="optional"></label>
+          <label>WhatsApp mobile *<input name="mobile" inputmode="numeric" maxlength="10" placeholder="students reply to this number"></label>
           <label>Password<input name="password" type="text" maxlength="60" placeholder="leave empty to auto-generate"></label>
           <button class="btn primary wide" type="submit">Create account</button>
           <p class="aerr" id="userMsg" role="alert"></p>
@@ -164,7 +164,7 @@
       </article>
       <article class="card">
         <header class="ch"><div><b>🔑 Access control</b><small>Only you (main admin) can see full numbers and download data</small></div></header>
-        <label class="switch-row"><input type="checkbox" id="allowReveal"><span><b>Let counsellors view one number at a time to call</b><small>Off = counsellors only ever see 98XXXXXX10. When on, each view is logged and you get an alert.</small></span></label>
+        <label class="switch-row"><input type="checkbox" id="allowReveal"><span><b>Let counsellors call / WhatsApp their own students directly</b><small>Off = counsellors only ever see 98XXXXXX10 (students still get the counsellor's WhatsApp number and can message first). When on, each call/chat is logged and you get an alert.</small></span></label>
         <p class="cc-hint">Sub-admins can never download Excel/PDF, open the admin dashboard, copy, print or screenshot the list without you being told.</p>
       </article>
       <article class="card">

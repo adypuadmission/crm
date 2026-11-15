@@ -11,7 +11,7 @@ const env = (k, d = '') => process.env[k] || d;
 const OTP_TEXT = (otp) => `${otp} is your OTP to verify your mobile number for ADYPU admission enquiry. Valid for 5 minutes. Do not share it with anyone. - ADYPU`;
 const ALERT_TEXT = (d) => `ADYPU CRM security alert: ${String(d.text).replace(/[^\x20-\x7E]/g, '').slice(0, 110)}. Please check the admin dashboard. - ADYPU`;
 // Plain ASCII keeps the SMS in GSM encoding (160 chars per part instead of 70).
-const CONFIRM_TEXT = (e) => `Dear ${e.first}, thank you for your enquiry for ${String(e.course).replace(/[–—]/g, '-')} at Ajeenkya DY Patil University. Ref No: ${e.ref}. For queries call ${CONTACT_LINE}. - ADYPU`;
+const CONFIRM_TEXT = (e) => `Dear ${e.first}, thank you for your enquiry for ${String(e.course).replace(/[–—]/g, '-')} at Ajeenkya DY Patil University. Ref No: ${e.ref}. ${e.cphone ? `Your counsellor ${e.cname} - call or WhatsApp ${e.cphone}` : `For queries call ${CONTACT_LINE}`}. - ADYPU`;
 
 async function post(url, opts) {
   const r = await fetch(url, { ...opts, signal: AbortSignal.timeout(10000) });
@@ -39,7 +39,7 @@ const providers = {
     }
     const r = await post('https://control.msg91.com/api/v5/flow', { method: 'POST', headers, body: JSON.stringify(kind === 'alert'
       ? { template_id: env('MSG91_ALERT_TEMPLATE_ID'), short_url: '0', recipients: [{ mobiles: `91${mobile}`, text: String(data.text).slice(0, 110) }] }
-      : { template_id: env('MSG91_CONFIRM_TEMPLATE_ID'), short_url: '0', recipients: [{ mobiles: `91${mobile}`, name: data.first, course: data.course, ref: data.ref }] }) });
+      : { template_id: env('MSG91_CONFIRM_TEMPLATE_ID'), short_url: '0', recipients: [{ mobiles: `91${mobile}`, name: data.first, course: data.course, ref: data.ref, counsellor: data.cname || CONTACTS[0].name, counsellor_phone: data.cphone || CONTACTS[0].phone }] }) });
     return { ok: r.ok && r.body?.type !== 'error', detail: r.body };
   },
 
@@ -55,7 +55,7 @@ const providers = {
       : { route: 'q', message: ALERT_TEXT(data), numbers: mobile, flash: 0 };
     else if (env('FAST2SMS_CONFIRM_ROUTE', 'dlt') === 'q') body = { route: 'q', message: CONFIRM_TEXT(data), numbers: mobile, flash: 0 };
     else body = { route: 'dlt', sender_id: env('FAST2SMS_SENDER_ID'), message: env('FAST2SMS_CONFIRM_MESSAGE_ID'),
-      variables_values: `${data.first}|${data.course}|${data.ref}`, numbers: mobile, flash: 0 };
+      variables_values: [data.first, data.course, data.ref, data.cname || CONTACTS[0].name, data.cphone || CONTACTS[0].phone].map((v) => String(v).replace(/\|/g, '/')).join('|'), numbers: mobile, flash: 0 };
     const r = await post('https://www.fast2sms.com/dev/bulkV2', { method: 'POST', headers, body: JSON.stringify(body) });
     return { ok: r.ok && r.body?.return === true, detail: r.body };
   },

@@ -111,6 +111,9 @@ async function notifyAdmin(text, key) {
   if (Date.now() - (lastAlert.get(k) || 0) < ALERT_GAP) return; // throttle repeats
   lastAlert.set(k, Date.now());
   if (ADMIN_MOBILE) sms.send('alert', ADMIN_MOBILE, { text }).catch(() => {});
+  // WhatsApp alert too (works when the WhatsApp sending number is the office number, not the admin's own)
+  const waTo = String(process.env.ALERT_WHATSAPP_TO || ADMIN_MOBILE || '').replace(/\D/g, '').slice(-10);
+  if (waTo) require('./whatsapp').send('alert', waTo, { text }).catch(() => {});
   if (mailer) mailer.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to: ALERT_EMAIL_TO, subject: `⚠ ADYPU CRM security alert`,
     text: `${text}\n\nTime: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST\nOpen the admin dashboard → Security tab for details.` }).catch((e) => console.error('alert email', e.message));
 }
@@ -120,7 +123,8 @@ async function audit(req, action, details = '', severity = 'info', who) {
   const actor = t.role === 'admin' || t.u === ADMIN_USER ? ADMIN_NAME : t.username || t.u || 'anonymous';
   const role = t.role === 'sub' ? 'sub-admin' : t.role === 'admin' ? 'admin' : t.username ? 'login attempt' : 'public';
   try { await db.insertAudit({ actor, role, user_id: t.id, ip: req.ip, ua: req.get('user-agent'), action, details, severity }); } catch (e) { console.error('audit', e.message); }
-  if (SEVERE.has(severity)) notifyAdmin(`${actor} (${role}) - ${action.replace(/_/g, ' ')}${details ? ': ' + String(details).slice(0, 60) : ''}`, `${actor}:${action}`);
+  if (SEVERE.has(severity)) notifyAdmin(`${actor} (${role}) - ${action.replace(/_/g, ' ')}${details ? ': ' + String(details).slice(0, 60) : ''}`,
+    action.startsWith('export_') ? `${action}:${Date.now()}` : `${actor}:${action}`); // every download alerts; other repeats are throttled
 }
 
 const deny = (req, res, msg = 'Please log in again.') => (req.path.startsWith('/api/') ? res.status(401).json({ error: msg }) : res.redirect('/admin/login'));
@@ -199,7 +203,8 @@ app.get('/qr.svg', async (req, res) => {
 // Name of the counsellor behind a personal QR (only active accounts, only the display name)
 app.get('/api/ref', async (req, res) => {
   const u = req.query.u ? await db.getUserAuth(refSlug(req.query.u)) : null;
-  res.json(u && Number(u.active) ? { name: u.name } : {});
+  const c = u && Number(u.active) ? await counsellorOf({ counsellor_id: u.id }) : null;
+  res.json(u && Number(u.active) ? { name: u.name, phone: c ? c.phone : '' } : {});
 });
 // Printable A4 poster with the QR code
 app.get('/qr-poster.pdf', async (req, res) => {
@@ -311,9 +316,17 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
   res.json(await chat.answer(text, Array.isArray(req.body.history) ? req.body.history : []));
 });
 
+// The student's own counsellor (for replies on WhatsApp / call). Falls back to the admission helpline contacts.
+async function counsellorOf(row) {
+  if (!row || !row.counsellor_id) return null;
+  const u = await db.getUser(row.counsellor_id);
+  return u && Number(u.active) && /^[6-9]\d{9}$/.test(u.mobile || '') ? { name: u.name, phone: u.mobile } : null;
+}
 async function sendConfirmation(row) {
   if (!SEND_CONFIRMATION) return;
-  const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no });
+  const c = await counsellorOf(row);
+  const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no,
+    cname: c ? c.name.slice(0, 40) : '', cphone: c ? c.phone : '' });
   await db.updateEnquiry(row.id, { sms_status: r.ok ? (r.via === 'console' ? 'logged' : r.via === 'whatsapp' ? 'whatsapp' : 'sent') : 'failed' });
 }
 
@@ -336,7 +349,7 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
       : { source: req.body.src === 'qr' ? 'qr' : 'web' };
     const row = await db.insertEnquiry({ ...data, ...attribution, mobile_verified: verified });
     sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
-    res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: SEND_CONFIRMATION });
+    res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: SEND_CONFIRMATION, counsellor: await counsellorOf(row) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
@@ -468,8 +481,8 @@ app.post('/api/team/enquiries/:id/reveal', requireSub, requireXhr, async (req, r
   const row = await db.getEnquiry(parseInt(req.params.id, 10));
   if (!teamRow(row, req.user)) { audit(req, 'reveal_other_student', `id ${req.params.id}`, 'high'); return res.status(404).json({ error: 'Not found' }); }
   if (!(await db.getSetting('allow_reveal', false))) { audit(req, 'reveal_denied', row.ref_no, 'medium'); return res.status(403).json({ error: 'Viewing contact numbers is switched off by the admin.' }); }
-  audit(req, 'contact_number_viewed', `${row.ref_no}`, 'medium');
-  res.json({ mobile: row.mobile });
+  audit(req, req.body.via === 'whatsapp' ? 'whatsapp_chat_opened' : 'contact_number_viewed', `${row.ref_no}`, 'medium');
+  res.json({ mobile: row.mobile, first: String(row.student_name).split(' ')[0], course: row.course, ref: row.ref_no });
 });
 app.post('/api/team/enquiries', requireSub, requireXhr, async (req, res) => {
   try {
@@ -609,7 +622,7 @@ app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
   const password = String(req.body.password || '') || genPassword();
   if (name.length < 2) return res.status(400).json({ error: 'Please enter the full name.' });
   if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === ADMIN_USER.toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
-  if (mobile && !/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
+  if (!/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: "Enter the counsellor's 10-digit WhatsApp mobile number (students reply to it)." });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (await db.getUserAuth(username)) return res.status(409).json({ error: 'That username is already taken.' });
   const user = await db.createUser({ name, username, mobile, pass_hash: await bcrypt.hash(password, 12) });
@@ -649,7 +662,11 @@ app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res)
     if (req.body.counsellor_id === null || req.body.counsellor_id === '') { upd.counsellor_id = null; upd.counsellor_name = null; }
     else { const u = await db.getUser(parseInt(req.body.counsellor_id, 10)); if (!u) return res.status(400).json({ error: 'Unknown counsellor' }); upd.counsellor_id = u.id; upd.counsellor_name = u.name; }
   }
-  res.json({ row: await db.updateEnquiry(id, upd) });
+  const before = await db.getEnquiry(id);
+  const row = await db.updateEnquiry(id, upd);
+  // newly assigned counsellor → tell the student whom to WhatsApp / call
+  if (upd.counsellor_id && before && before.counsellor_id !== upd.counsellor_id) sendConfirmation(row).catch((e) => console.error('counsellor intro', e.message));
+  res.json({ row });
 });
 
 app.post('/api/admin/enquiries/:id/sms', requireAdmin, requireXhr, async (req, res) => {
@@ -708,7 +725,7 @@ const stampLine = (req) => `CONFIDENTIAL · Downloaded by main admin · ${fmtIST
 app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   const f = await exportFilters(req.query);
   const rows = await db.listEnquiries(f);
-  audit(req, 'export_excel', `${rows.length} rows · ${filterLabel(f).slice(0, 120)}`, 'info');
+  audit(req, 'export_excel', `${rows.length} records downloaded from IP ${req.ip}`, 'high');
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ADYPU Admission Desk';
   wb.subject = 'CONFIDENTIAL student data - authorised use only';
@@ -778,7 +795,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
 app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   const f = await exportFilters(req.query);
   const rows = await db.listEnquiries(f);
-  audit(req, 'export_pdf', `${rows.length} rows · ${filterLabel(f).slice(0, 120)}`, 'info');
+  audit(req, 'export_pdf', `${rows.length} records downloaded from IP ${req.ip}`, 'high');
   const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 36, bufferPages: true, info: { Title: 'ADYPU Admission Enquiries', Author: 'ADYPU Admission Desk' } });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="ADYPU_Admission_Enquiries_${stamp()}.pdf"`);

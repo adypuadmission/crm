@@ -97,7 +97,7 @@
     if (!rows.length) { $('#rows').innerHTML = '<tr><td colspan="10" class="empty">No students yet. Add one above or upload a file.</td></tr>'; return; }
     $('#rows').innerHTML = rows.map((r, i) => `<tr data-id="${r.id}">
       <td class="muted">${i + 1}</td><td><code>${esc(r.ref_no)}</code></td><td><b>${esc(r.student_name)}</b></td>
-      <td class="nowrap"><span class="mask" title="Hidden for privacy — only the main admin can see full numbers">🔒 +91 ${esc(r.mobile)}</span>${ALLOW_REVEAL ? ` <button class="btn xs reveal" type="button">📞 Call</button>` : ''}${r.email ? `<br><span class="muted">${esc(r.email)}</span>` : ''}</td>
+      <td class="nowrap"><span class="mask" title="Hidden for privacy — only the main admin can see full numbers">🔒 +91 ${esc(r.mobile)}</span>${ALLOW_REVEAL ? ` <button class="btn xs reveal" data-via="call" type="button">📞 Call</button> <button class="btn xs reveal wa" data-via="whatsapp" type="button">💬 WhatsApp</button>` : ''}${r.email ? `<br><span class="muted">${esc(r.email)}</span>` : ''}</td>
       <td>${esc(r.city || '—')}</td>
       <td><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level)}</span> <b>${esc(r.programme)}</b>${r.branch ? `<br><span class="muted">${esc(r.branch)}</span>` : ''}</td>
       <td><select class="st ${STATUS_CLS[r.status] || ''}">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></td>
@@ -108,9 +108,15 @@
   $('#rows').addEventListener('click', async (e) => {
     const b = e.target.closest('.reveal'); if (!b) return;
     const tr = b.closest('tr');
-    if (!confirm('The number will be shown for 20 seconds so you can call. This is recorded and the admin is informed. Continue?')) return;
-    const j = await api(`/api/team/enquiries/${tr.dataset.id}/reveal`, { method: 'POST' });
+    const via = b.dataset.via;
+    if (!confirm(`This opens ${via === 'whatsapp' ? 'a WhatsApp chat from your own WhatsApp' : 'a call'} with the student. It is recorded and the admin is informed. Continue?`)) return;
+    const j = await api(`/api/team/enquiries/${tr.dataset.id}/reveal`, { method: 'POST', body: JSON.stringify({ via }) });
     if (!j.mobile) return toast(j.error || 'Not allowed');
+    if (via === 'whatsapp') {
+      const msg = `Hello ${j.first}, I am ${ME.name} from the Admission Office, Ajeenkya DY Patil University, Pune. Thank you for your enquiry for ${j.course} (Ref: ${j.ref}). Please reply here for any query — I will guide you.`;
+      window.open(`https://wa.me/91${j.mobile}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener');
+      return;
+    }
     const a = document.createElement('a'); a.href = 'tel:+91' + j.mobile; a.className = 'btn xs primary'; a.textContent = '📞 Tap to call';
     b.replaceWith(a); setTimeout(() => { if (a.isConnected) a.remove(); }, 20000);
   });

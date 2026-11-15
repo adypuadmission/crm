@@ -311,6 +311,14 @@
     $('#refNo').textContent = j.ref_no;
     $('#smsNote').hidden = !j.smsSent || j.duplicate;
     $('#smsNote').textContent = `📱 A confirmation message (WhatsApp / SMS) is on its way to +91 ${d.mobile.slice(0, 5)} ${d.mobile.slice(5)}`;
+    // Student came through a counsellor → their counsellor is the person to reply to
+    if (j.counsellor && j.counsellor.phone) {
+      renderContacts([{ name: j.counsellor.name, phone: j.counsellor.phone }]);
+      $('#succHelpTitle').textContent = 'Your admission counsellor — reply anytime on WhatsApp:';
+      const wa = $('#waCounsellor');
+      wa.href = `https://wa.me/91${j.counsellor.phone}?text=${encodeURIComponent(`Hello ${j.counsellor.name}, I am ${d.student_name}. I enquired for ${d.course} at ADYPU (Ref: ${j.ref_no}).`)}`;
+      wa.textContent = `💬 Chat with ${j.counsellor.name} on WhatsApp`; wa.hidden = false;
+    }
     $('#formCard').classList.add('hidden');
     $('#successCard').classList.remove('hidden');
     window.scrollTo({ top: $('#successCard').offsetTop - 20, behavior: 'smooth' });
