@@ -49,7 +49,11 @@ const providers = {
   async fast2sms(kind, mobile, data) {
     const headers = { authorization: env('FAST2SMS_API_KEY'), 'Content-Type': 'application/json', accept: 'application/json' };
     let body;
-    if (kind === 'otp') body = { route: 'otp', variables_values: data.otp, numbers: mobile };
+    // FAST2SMS_OTP_ROUTE: otp (needs Fast2SMS website verification) | q (Quick SMS, works immediately, higher cost) | dlt
+    const otpRoute = env('FAST2SMS_OTP_ROUTE', 'otp');
+    if (kind === 'otp' && otpRoute === 'q') body = { route: 'q', message: OTP_TEXT(data.otp), numbers: mobile, flash: 0 };
+    else if (kind === 'otp' && otpRoute === 'dlt') body = { route: 'dlt', sender_id: env('FAST2SMS_SENDER_ID'), message: env('FAST2SMS_OTP_MESSAGE_ID'), variables_values: String(data.otp), numbers: mobile, flash: 0 };
+    else if (kind === 'otp') body = { route: 'otp', variables_values: data.otp, numbers: mobile };
     else if (kind === 'alert') body = env('FAST2SMS_ALERT_MESSAGE_ID')
       ? { route: 'dlt', sender_id: env('FAST2SMS_SENDER_ID'), message: env('FAST2SMS_ALERT_MESSAGE_ID'), variables_values: String(data.text).replace(/\|/g, '/').slice(0, 110), numbers: mobile, flash: 0 }
       : { route: 'q', message: ALERT_TEXT(data), numbers: mobile, flash: 0 };

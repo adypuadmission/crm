@@ -29,6 +29,8 @@ services:
         sync: false
       - key: FAST2SMS_CONFIRM_ROUTE
         value: q
+      - key: FAST2SMS_OTP_ROUTE   # q until Fast2SMS website verification is approved, then change to otp (cheaper)
+        value: q
       # WhatsApp (Meta Cloud API) from the ADMISSION OFFICE number — students get OTP + confirmation naming their counsellor; SMS is the fallback
       - key: MESSAGE_CHANNEL
         value: whatsapp
