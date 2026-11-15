@@ -19,8 +19,16 @@ services:
         generateValue: true
       - key: DATA_KEY            # encrypts student names, mobiles, emails. NEVER change or lose it.
         generateValue: true
+      - key: ADMIN_NAME
+        value: Dr. Atul Kathole
       - key: ADMIN_MOBILE        # admin login OTP + security alert SMS
+        value: "9960889772"
+      - key: OTP_DEMO_MODE
+        value: "false"
+      - key: FAST2SMS_API_KEY    # from fast2sms.com → Dev API (account registered on 9960889772)
         sync: false
+      - key: FAST2SMS_CONFIRM_ROUTE
+        value: q
       - key: ALERT_EMAIL_TO
         sync: false
       - key: SMTP_HOST
@@ -30,7 +38,7 @@ services:
       - key: SMTP_PASS
         sync: false
       - key: SMS_PROVIDER
-        value: console
+        value: fast2sms
       - key: OTP_REQUIRED
         value: "true"
       - key: SEND_CONFIRMATION_SMS

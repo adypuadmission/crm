@@ -80,7 +80,7 @@
     if (!me) return;
     ME = me;
     const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-    watermark(me.role === 'sub' ? `${me.name} · @${me.username} · ${me.ip} · ${when}` : `CONFIDENTIAL · MAIN ADMIN · ${when}`);
+    watermark(me.role === 'sub' ? `${me.name} · @${me.username} · ${me.ip} · ${when}` : `CONFIDENTIAL · ${me.name} (Main Admin) · ${when}`);
     if (me.role === 'sub') protectSub();
     idleLogout(me.idleMinutes || 15);
   }).catch(() => {});

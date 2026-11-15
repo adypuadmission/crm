@@ -40,7 +40,8 @@ if (!ADMIN_HASH) {
 }
 if (!process.env.SESSION_SECRET) console.warn('⚠  SESSION_SECRET not set — admin sessions reset on every restart.');
 // Security alerts + admin two-step login go to this mobile (and optionally email)
-const ADMIN_MOBILE = String(process.env.ADMIN_MOBILE || '').replace(/\D/g, '').slice(-10);
+const ADMIN_NAME = process.env.ADMIN_NAME || 'Dr. Atul Kathole';
+const ADMIN_MOBILE = String(process.env.ADMIN_MOBILE || '9960889772').replace(/\D/g, '').slice(-10);
 const ADMIN_2FA = !!ADMIN_MOBILE && process.env.ADMIN_2FA !== 'false';
 if (!ADMIN_MOBILE) console.warn('⚠  ADMIN_MOBILE not set — security alerts will appear only in the dashboard and admin login has no OTP step.');
 const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
@@ -116,7 +117,7 @@ async function notifyAdmin(text, key) {
 const SEVERE = new Set(['high', 'critical']);
 async function audit(req, action, details = '', severity = 'info', who) {
   const t = who || req.user || readToken(req) || {};
-  const actor = t.role === 'admin' || t.u === ADMIN_USER ? 'admin' : t.username || t.u || 'anonymous';
+  const actor = t.role === 'admin' || t.u === ADMIN_USER ? ADMIN_NAME : t.username || t.u || 'anonymous';
   const role = t.role === 'sub' ? 'sub-admin' : t.role === 'admin' ? 'admin' : t.username ? 'login attempt' : 'public';
   try { await db.insertAudit({ actor, role, user_id: t.id, ip: req.ip, ua: req.get('user-agent'), action, details, severity }); } catch (e) { console.error('audit', e.message); }
   if (SEVERE.has(severity)) notifyAdmin(`${actor} (${role}) - ${action.replace(/_/g, ' ')}${details ? ': ' + String(details).slice(0, 60) : ''}`, `${actor}:${action}`);
@@ -126,7 +127,7 @@ const deny = (req, res, msg = 'Please log in again.') => (req.path.startsWith('/
 // Main admin only
 function requireAdmin(req, res, next) {
   const t = readToken(req);
-  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: 'Admin', u: ADMIN_USER }; return next(); }
+  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: ADMIN_NAME, u: ADMIN_USER }; return next(); }
   if (t && t.role === 'sub') {
     audit(req, 'blocked_admin_access', `${req.method} ${req.originalUrl.split('?')[0]}`, 'high', { ...t, username: t.u });
     return req.originalUrl.startsWith('/api/') ? res.status(403).json({ error: 'You do not have permission for this. The admin has been notified.' }) : res.redirect('/team');
@@ -415,7 +416,7 @@ app.post('/api/admin/logout', (req, res) => {
 // Who is signed in (for the on-screen watermark)
 app.get('/api/security/whoami', (req, res) => {
   const t = readToken(req); if (!t) return res.status(401).json({});
-  res.json({ role: t.role === 'sub' ? 'sub' : 'admin', name: t.role === 'sub' ? t.n : 'Main Admin', username: t.u, ip: req.ip, idleMinutes: Number(process.env.IDLE_MINUTES || 15) });
+  res.json({ role: t.role === 'sub' ? 'sub' : 'admin', name: t.role === 'sub' ? t.n : ADMIN_NAME, username: t.u, ip: req.ip, idleMinutes: Number(process.env.IDLE_MINUTES || 15) });
 });
 // Copy / print / screenshot / right-click attempts reported by the dashboards
 const EVENTS = { copy: 'copy_attempt', cut: 'copy_attempt', paste: 'paste_attempt', print: 'print_attempt', screenshot: 'screenshot_attempt', contextmenu: 'right_click',
@@ -583,7 +584,7 @@ app.get('/api/admin/security', requireAdmin, async (req, res) => {
   const [events, unseen, allowReveal, raw] = await Promise.all([db.listAudit({ limit: Math.min(1000, +req.query.limit || 400), severity: req.query.severity || undefined }),
     db.countUnseenAlerts(), db.getSetting('allow_reveal', false), db.rawSample(3)]);
   res.json({ events, unseen, settings: { allowReveal },
-    status: { encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
+    status: { adminName: ADMIN_NAME, encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
       smsProvider: sms.provider, https: IS_PROD, sessionHours: SESSION_HOURS, idleMinutes: Number(process.env.IDLE_MINUTES || 15) },
     // what someone opening the database directly would see
     rawSample: raw.map((r) => ({ ref_no: r.ref_no, student_name: String(r.student_name || '').slice(0, 30) + '…', mobile: String(r.mobile || '').slice(0, 30) + '…' })) });

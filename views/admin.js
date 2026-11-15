@@ -555,4 +555,5 @@
   clock(); setInterval(clock, 30000);
   load();
   setInterval(() => { if (document.visibilityState === 'visible' && !document.activeElement.matches('input,select')) load(); }, 60000);
+  fetch('/api/security/whoami').then((r) => r.json()).then((m) => { if (m.name) $('#adminChip').textContent = '👤 ' + m.name; }).catch(() => {});
 })();
