@@ -14,7 +14,7 @@ f.addEventListener('submit', async (e) => {
       const j = await post('/api/admin/login', { username: f.username.value.trim(), password: f.password.value });
       if (j.ok && j.otp) {
         challenge = j.challenge; otpStep.hidden = false; f.username.disabled = f.password.disabled = true;
-        document.getElementById('otpMsg').textContent = `A 6-digit login code was sent to +91 ${j.sentTo}.` + (j.demoOtp ? ` (Demo mode code: ${j.demoOtp})` : '');
+        document.getElementById('otpMsg').textContent = `A 6-digit login code was sent to ${j.sentTo}.` + (j.demoOtp ? ` (Demo mode code: ${j.demoOtp})` : '');
         btn.textContent = 'Verify & sign in'; f.otp.focus();
       } else if (j.ok) { location.href = j.redirect || '/admin'; return; }
       else { err.textContent = j.error || 'Login failed'; btn.textContent = 'Sign in'; }

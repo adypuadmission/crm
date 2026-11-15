@@ -44,6 +44,8 @@ if (!process.env.SESSION_SECRET) console.warn('⚠  SESSION_SECRET not set — a
 const ADMIN_NAME = process.env.ADMIN_NAME || 'Dr. Atul Kathole';
 const ADMIN_MOBILE = String(process.env.ADMIN_MOBILE || '9960889772').replace(/\D/g, '').slice(-10);
 const ADMIN_2FA = !!ADMIN_MOBILE && process.env.ADMIN_2FA !== 'false';
+// Admin login code + security alerts: 'email' (default) or 'sms' (also email). Switchable in the Security tab.
+const adminSms = async () => (await db.getSetting('admin_sms', process.env.ADMIN_SMS === 'true')) === true;
 if (!ADMIN_MOBILE) console.warn('⚠  ADMIN_MOBILE not set — security alerts will appear only in the dashboard and admin login has no OTP step.');
 const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
 let mailer = null;
@@ -129,7 +131,7 @@ async function notifyAdmin(text, key) {
   const k = key || text;
   if (Date.now() - (lastAlert.get(k) || 0) < ALERT_GAP) return; // throttle repeats
   lastAlert.set(k, Date.now());
-  if (ADMIN_MOBILE) sms.send('alert', ADMIN_MOBILE, { text }).catch(() => {});
+  if (ADMIN_MOBILE && (await adminSms())) sms.send('alert', ADMIN_MOBILE, { text }).catch(() => {});
   // WhatsApp alert too (works when the WhatsApp sending number is the office number, not the admin's own)
   const waTo = String(process.env.ALERT_WHATSAPP_TO || ADMIN_MOBILE || '').replace(/\D/g, '').slice(-10);
   if (waTo) require('./whatsapp').send('alert', waTo, { text }).catch(() => {});
@@ -405,9 +407,21 @@ app.post('/api/admin/login', loginLimiter, requireXhr, async (req, res) => {
     if (ADMIN_2FA) {
       const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0'), id = crypto.randomBytes(16).toString('base64url');
       challenges.set(id, { hash: sign('2fa:' + code), exp: Date.now() + 5 * 60000, tries: 0, d: devHash(req) });
-      const sent = OTP_DEMO ? { ok: true } : await sms.send('otp', ADMIN_MOBILE, { otp: code });
-      if (!sent.ok) return res.status(502).json({ error: 'Could not send the login OTP. Please try again.' });
-      return res.json({ ok: true, otp: true, challenge: id, sentTo: sec.maskMobile(ADMIN_MOBILE), ...(OTP_DEMO ? { demoOtp: code } : {}) });
+      const viaSms = (await adminSms()) || !mailer;
+      let sent = { ok: true };
+      if (!OTP_DEMO) {
+        if (viaSms) sent = await sms.send('otp', ADMIN_MOBILE, { otp: code });
+        else {
+          const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+          sent = await mailer.sendMail({ to: ALERT_EMAIL_TO, subject: `ADYPU CRM login code: ${code}`,
+            text: `Your ADYPU CRM admin login code is ${code}\n\nIt is valid for 5 minutes. Requested ${when} IST from IP ${req.ip}.\nIf you did not try to sign in, change the admin password immediately.`,
+            html: `<div style="font-family:Arial,sans-serif;max-width:520px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>ADYPU CRM - admin login code</b></div><div style="border:1px solid #e2e8f0;border-top:0;padding:20px;border-radius:0 0 10px 10px"><p style="margin:0 0 8px">Your login code is</p><p style="font-size:32px;letter-spacing:8px;font-weight:700;margin:0 0 14px;color:#0B1F4B">${code}</p><p style="color:#64748b;font-size:13px;margin:0">Valid for 5 minutes. Requested ${when} IST from IP ${req.ip}.<br>If this was not you, change the admin password immediately.</p></div></div>` })
+            .then(() => ({ ok: true })).catch((e) => { console.error('login code email', e.message); return { ok: false }; });
+        }
+      }
+      if (!sent.ok) return res.status(502).json({ error: 'Could not send the login code. Please try again.' });
+      const maskedEmail = sec.maskEmail(ALERT_EMAIL_TO);
+      return res.json({ ok: true, otp: true, challenge: id, sentTo: viaSms ? `+91 ${sec.maskMobile(ADMIN_MOBILE)} by SMS` : `${maskedEmail} by email (check Inbox / Spam)`, ...(OTP_DEMO ? { demoOtp: code } : {}) });
     }
     setSession(res, { u: ADMIN_USER, role: 'admin' }, req);
     audit(req, 'admin_login', 'password', 'info', { role: 'admin', u: ADMIN_USER });
@@ -614,16 +628,17 @@ const genPassword = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrs
 app.get('/api/admin/security', requireAdmin, async (req, res) => {
   const [events, unseen, allowReveal, raw] = await Promise.all([db.listAudit({ limit: Math.min(1000, +req.query.limit || 400), severity: req.query.severity || undefined }),
     db.countUnseenAlerts(), db.getSetting('allow_reveal', false), db.rawSample(3)]);
-  res.json({ events, unseen, settings: { allowReveal, otpRequired: await otpOn() },
-    status: { adminName: ADMIN_NAME, encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
+  res.json({ events, unseen, settings: { allowReveal, otpRequired: await otpOn(), adminSms: await adminSms() },
+    status: { adminName: ADMIN_NAME, encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, adminSms: await adminSms(), alertEmailTo: sec.maskEmail(ALERT_EMAIL_TO), alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
       smsProvider: sms.provider, https: IS_PROD, sessionHours: SESSION_HOURS, idleMinutes: Number(process.env.IDLE_MINUTES || 15) },
     // what someone opening the database directly would see
     rawSample: raw.map((r) => ({ ref_no: r.ref_no, student_name: String(r.student_name || '').slice(0, 30) + '…', mobile: String(r.mobile || '').slice(0, 30) + '…' })) });
 });
 app.post('/api/admin/security/test-alert', requireAdmin, requireXhr, async (req, res) => {
   const text = `Test alert from ${ADMIN_NAME} - security alerts are working`;
-  const out = { sms: ADMIN_MOBILE ? 'sent to +91 ' + sec.maskMobile(ADMIN_MOBILE) : 'no admin mobile set', email: 'not set up (add SMTP_PASS on Render)' };
-  if (ADMIN_MOBILE) { const r = await sms.send('alert', ADMIN_MOBILE, { text }); out.sms = r.ok ? out.sms : 'SMS failed - check the SMS account balance'; }
+  const smsOn = await adminSms();
+  const out = { sms: !smsOn ? 'off (email only)' : ADMIN_MOBILE ? 'sent to +91 ' + sec.maskMobile(ADMIN_MOBILE) : 'no admin mobile set', email: 'not set up' };
+  if (ADMIN_MOBILE && smsOn) { const r = await sms.send('alert', ADMIN_MOBILE, { text }); out.sms = r.ok ? out.sms : 'SMS failed - check the SMS account balance'; }
   if (mailer) { try { await sendAlertEmail(text); out.email = 'sent to ' + ALERT_EMAIL_TO; } catch (e) { out.email = 'failed: ' + e.message.slice(0, 120); } }
   audit(req, 'test_alert', `SMS: ${out.sms} | Email: ${out.email}`, 'info');
   res.json(out);
@@ -632,7 +647,8 @@ app.post('/api/admin/security/seen', requireAdmin, requireXhr, async (_req, res)
 app.patch('/api/admin/security/settings', requireAdmin, requireXhr, async (req, res) => {
   if (req.body.allowReveal !== undefined) { await db.setSetting('allow_reveal', !!req.body.allowReveal); audit(req, 'setting_changed', `counsellors can view numbers: ${!!req.body.allowReveal ? 'ON' : 'OFF'}`, 'medium'); }
   if (req.body.otpRequired !== undefined) { await db.setSetting('otp_required', !!req.body.otpRequired); audit(req, 'setting_changed', `student mobile OTP: ${req.body.otpRequired ? 'ON' : 'OFF'}`, 'medium'); }
-  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false), otpRequired: await otpOn() } });
+  if (req.body.adminSms !== undefined) { await db.setSetting('admin_sms', !!req.body.adminSms); audit(req, 'setting_changed', `admin login code + alerts by SMS: ${req.body.adminSms ? 'ON' : 'OFF (email only)'}`, 'medium'); }
+  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false), otpRequired: await otpOn(), adminSms: await adminSms() } });
 });
 
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {

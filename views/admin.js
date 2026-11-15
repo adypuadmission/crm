@@ -483,12 +483,12 @@
   async function loadSecurity() {
     const r = await fetch('/api/admin/security?' + new URLSearchParams({ severity: $('#secSev').value }), { headers: { 'X-Requested-With': 'fetch' } });
     if (!r.ok) return; const j = await r.json();
-    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired;
+    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired; $('#adminSms').checked = !!j.settings.adminSms;
     const st = j.status, ok = (b) => (b ? '✅' : '⚠️');
     $('#secStatus').innerHTML = [
       [true, `Encryption at rest: <b>${esc(st.encryption)}</b>`], [st.dataKey, st.dataKey ? 'Dedicated encryption key (DATA_KEY) set' : 'Set a dedicated <code>DATA_KEY</code> in the server settings'],
-      [true, 'Counsellors see masked numbers only · no downloads for anyone but you'], [st.twoFA, st.twoFA ? `Admin login needs an OTP sent to +91 ${esc(st.alertMobile)}` : 'Set <code>ADMIN_MOBILE</code> to turn on OTP login + SMS alerts'],
-      [!!st.alertMobile || st.alertEmail, `Alerts: ${st.alertMobile ? 'SMS to +91 ' + esc(st.alertMobile) : 'dashboard only'}${st.alertEmail ? ' + email' : ''}`],
+      [true, 'Counsellors see masked numbers only · no downloads for anyone but you'], [st.twoFA, st.twoFA ? `Admin login needs a code sent to ${st.adminSms ? '+91 ' + esc(st.alertMobile) + ' (SMS)' : esc(st.alertEmailTo) + ' (email)'}` : 'Set <code>ADMIN_MOBILE</code> to turn on OTP login + SMS alerts'],
+      [st.alertEmail || st.adminSms, `Alerts: ${st.alertEmail ? 'email to ' + esc(st.alertEmailTo) : ''}${st.alertEmail && st.adminSms ? ' + ' : ''}${st.adminSms ? 'SMS to +91 ' + esc(st.alertMobile) : ''}${!st.alertEmail && !st.adminSms ? 'dashboard only' : ''}`],
       [st.https, st.https ? 'HTTPS enforced · secure cookies' : 'Running in development mode (no HTTPS)'],
       [true, `Sessions expire after ${st.sessionHours} h, sign-out after ${st.idleMinutes} min idle, tied to one browser`],
       [true, 'Account locks for 15 min after 5 wrong passwords · every action is logged'],
@@ -508,6 +508,10 @@
     e.target.disabled = false; toast(`SMS: ${r.sms || '?'} · Email: ${r.email || '?'}`); loadSecurity();
   });
   $('#secSeen').addEventListener('click', async () => { await fetch('/api/admin/security/seen', { method: 'POST', headers: { 'X-Requested-With': 'fetch' } }); loadSecurity(); toast('Alerts marked as seen'); });
+  $('#adminSms').addEventListener('change', async (e) => {
+    await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ adminSms: e.target.checked }) });
+    toast(e.target.checked ? 'Login code & alerts: SMS + email' : 'Login code & alerts: email only'); loadSecurity();
+  });
   $('#otpRequired').addEventListener('change', async (e) => {
     await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ otpRequired: e.target.checked }) });
     toast(e.target.checked ? 'Student OTP verification is ON' : 'Student OTP verification is OFF — students can submit without OTP'); loadSecurity();
