@@ -310,7 +310,7 @@
       : `Thank you for choosing ${d.course}. Our admission counsellor will contact you shortly.`;
     $('#refNo').textContent = j.ref_no;
     $('#smsNote').hidden = !j.smsSent || j.duplicate;
-    $('#smsNote').textContent = `📱 A confirmation SMS is on its way to +91 ${d.mobile.slice(0, 5)} ${d.mobile.slice(5)}`;
+    $('#smsNote').textContent = `📱 A confirmation message (WhatsApp / SMS) is on its way to +91 ${d.mobile.slice(0, 5)} ${d.mobile.slice(5)}`;
     $('#formCard').classList.add('hidden');
     $('#successCard').classList.remove('hidden');
     window.scrollTo({ top: $('#successCard').offsetTop - 20, behavior: 'smooth' });

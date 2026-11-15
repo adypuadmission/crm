@@ -314,7 +314,7 @@ app.post('/api/chat', chatLimiter, async (req, res) => {
 async function sendConfirmation(row) {
   if (!SEND_CONFIRMATION) return;
   const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no });
-  await db.updateEnquiry(row.id, { sms_status: r.ok ? (sms.provider === 'console' ? 'logged' : 'sent') : 'failed' });
+  await db.updateEnquiry(row.id, { sms_status: r.ok ? (r.via === 'console' ? 'logged' : r.via === 'whatsapp' ? 'whatsapp' : 'sent') : 'failed' });
 }
 
 const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false,
@@ -656,7 +656,7 @@ app.post('/api/admin/enquiries/:id/sms', requireAdmin, requireXhr, async (req, r
   const row = (await db.listEnquiries({})).find((r) => r.id === parseInt(req.params.id, 10));
   if (!row) return res.status(404).json({ error: 'Not found' });
   const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no });
-  const out = await db.updateEnquiry(row.id, { sms_status: r.ok ? (sms.provider === 'console' ? 'logged' : 'sent') : 'failed' });
+  const out = await db.updateEnquiry(row.id, { sms_status: r.ok ? (r.via === 'console' ? 'logged' : r.via === 'whatsapp' ? 'whatsapp' : 'sent') : 'failed' });
   res.status(r.ok ? 200 : 502).json({ row: out, ok: r.ok });
 });
 

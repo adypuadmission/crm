@@ -71,17 +71,27 @@ const providers = {
   },
 };
 
+// MESSAGE_CHANNEL: sms (default) | whatsapp (WhatsApp first, SMS if WhatsApp fails) | both (send on both)
+const wa = require('./whatsapp');
+const CHANNEL = (process.env.MESSAGE_CHANNEL || (wa.enabled ? 'whatsapp' : 'sms')).toLowerCase();
 async function send(kind, mobile, data) {
+  if (CHANNEL === 'sms' || !wa.enabled) return sendSms(kind, mobile, data);
+  const w = await wa.send(kind, mobile, data);
+  if (CHANNEL === 'both') { const s = await sendSms(kind, mobile, data); return { ok: w.ok || s.ok, via: [w.ok && 'whatsapp', s.ok && 'sms'].filter(Boolean).join('+') || 'none' }; }
+  if (w.ok) return { ok: true, via: 'whatsapp' };
+  return sendSms(kind, mobile, data); // fallback
+}
+async function sendSms(kind, mobile, data) {
   const fn = providers[P];
   if (!fn) { console.error(`Unknown SMS_PROVIDER "${P}"`); return { ok: false }; }
   try {
     const res = await fn(kind, mobile, data);
     if (!res.ok) console.error(`[SMS:${P}] ${kind} to ${mobile.slice(0, 2)}xxxxxx${mobile.slice(-2)} failed:`, JSON.stringify(res.detail).slice(0, 300));
-    return res;
+    return { ...res, via: P === 'console' ? 'console' : 'sms' };
   } catch (e) {
     console.error(`[SMS:${P}] ${kind} error:`, e.message);
     return { ok: false };
   }
 }
 
-module.exports = { send, provider: P, OTP_TEXT, CONFIRM_TEXT, ALERT_TEXT };
+module.exports = { send, provider: wa.enabled && CHANNEL !== 'sms' ? `WhatsApp${CHANNEL === 'both' ? ' + ' + P : ' → ' + P}` : P, OTP_TEXT, CONFIRM_TEXT, ALERT_TEXT };

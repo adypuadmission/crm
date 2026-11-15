@@ -98,6 +98,23 @@ Open http://localhost:3000.
 
 ---
 
+## 💬 WhatsApp messages (OTP + confirmation)
+
+Students can receive their OTP and the thank-you message on **WhatsApp** from the admission number (9960889772), through Meta's official **WhatsApp Business Cloud API**. If a WhatsApp message fails (e.g. the student has no WhatsApp), the portal automatically sends an SMS instead. Approximate Meta charge in India: ~₹0.12–0.15 per OTP or confirmation (no monthly fee when you connect directly to Meta).
+
+**One-time setup (≈30 minutes + template approval):**
+1. Install **WhatsApp Business** (not personal WhatsApp) on the phone with 9960889772; WhatsApp can move your chats over. Update it to the latest version.
+2. Go to **business.facebook.com** → create/verify the business "Ajeenkya DY Patil University – Admissions".
+3. In **developers.facebook.com** create an app (type *Business*) → add **WhatsApp** → *Add phone number* → enter 9960889772 → choose **"Connect your existing WhatsApp Business app"** and scan the QR code shown in the app. (This is *coexistence*: you keep chatting from the app on your phone.)
+4. Copy the **Phone number ID** → `WA_PHONE_NUMBER_ID`. In Business Settings → System users, create a system user, give it the WhatsApp app, and generate a **permanent token** with `whatsapp_business_messaging` → `WA_TOKEN`.
+5. In **WhatsApp Manager → Message templates** create:
+   - `adypu_otp` — category **Authentication**, *Copy code* button (Meta writes the text).
+   - `adypu_enquiry_confirm` — category **Utility**, language English:
+     > Dear {{1}}, thank you for your enquiry for {{2}} at Ajeenkya DY Patil University, Pune. Your reference number is {{3}}. Our admission counsellor will contact you shortly. For queries call Dr. Maqsood Ahmed Ansari 9822070363 or Mrs. Rebekah Gaware 7773900773.
+6. Add a payment method in WhatsApp Manager, put the values in Render's environment, redeploy.
+
+Note: a WhatsApp number cannot send messages to itself, so the **main admin's** login code and security alerts (to the same 9960889772) continue by **SMS**. To get them on WhatsApp, set `ADMIN_MOBILE` to a different number and create a Utility template `WA_ALERT_TEMPLATE` with one variable.
+
 ## Setting up SMS (OTP + confirmation)
 Indian SMS rules (TRAI DLT) require a registered **sender ID** and **approved templates** before messages are delivered. One-time steps:
 

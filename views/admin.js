@@ -8,7 +8,7 @@
   const istParts = (iso) => { const d = new Date(new Date(iso).getTime() + 330 * 60000); return { dow: (d.getUTCDay() + 6) % 7, hour: d.getUTCHours() }; };
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const STATUS_CLS = { 'New': 's-new', 'Contacted': 's-contacted', 'Interested': 's-interested', 'Counselling Done': 's-counsel', 'Applied': 's-applied', 'Admitted': 's-admitted', 'Not Interested': 's-no' };
-  const SMS_BADGE = { sent: ['✓ Sent', 'ok'], logged: ['Logged (test)', 'test'], failed: ['✕ Failed', 'bad'] };
+  const SMS_BADGE = { whatsapp: ['✓ WhatsApp', 'ok'], sent: ['✓ Sent', 'ok'], logged: ['Logged (test)', 'test'], failed: ['✕ Failed', 'bad'] };
   const FUNNEL = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Applied', 'Admitted'];
   const PAL = {
     UG: { base: '#0B1F4B', progs: ['#1e3a8a', '#3b5bdb', '#6d83f2', '#a5b4fc'], br: '#c7d2fe' },
@@ -55,7 +55,7 @@
     inited = true;
     $('#status').insertAdjacentHTML('beforeend', STATUSES.map((s) => `<option>${esc(s)}</option>`).join(''));
     const pill = $('#smsPill');
-    pill.textContent = j.smsProvider === 'console' ? '📵 SMS: test mode' : `📱 SMS: ${j.smsProvider}`;
+    pill.textContent = j.smsProvider === 'console' ? '📵 SMS: test mode' : `📱 ${j.smsProvider.startsWith('WhatsApp') ? '' : 'SMS: '}${j.smsProvider}`;
     pill.classList.toggle('warn', j.smsProvider === 'console');
     fillProgrammes(); fillBranches();
   }
