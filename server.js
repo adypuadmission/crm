@@ -49,7 +49,17 @@ const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
 let mailer = null;
 // Email alerts: the alert mailbox can send to itself. SMTP_USER defaults to ALERT_EMAIL_TO; SMTP_PASS is that mailbox's App Password.
 const SMTP_USER = process.env.SMTP_USER || ALERT_EMAIL_TO;
-if (ALERT_EMAIL_TO && process.env.SMTP_PASS) {
+// Hosts like Render's free plan block SMTP ports. MAIL_WEBHOOK_URL = a Google Apps Script web app (see google-apps-script/alert-mailer.gs)
+// that sends the email from the admin's Gmail over HTTPS. It is used first when set.
+const MAIL_WEBHOOK_URL = process.env.MAIL_WEBHOOK_URL || '';
+if (MAIL_WEBHOOK_URL) {
+  mailer = { sendMail: async (m) => {
+    const r = await fetch(MAIL_WEBHOOK_URL, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', to: m.to, subject: m.subject, text: m.text, html: m.html }) });
+    const body = await r.text();
+    if (!r.ok || !/^ok/.test(body.trim())) throw new Error(`mail relay replied ${r.status}: ${body.replace(/<[^>]+>/g, ' ').trim().slice(0, 100)}`);
+  } };
+} else if (ALERT_EMAIL_TO && process.env.SMTP_PASS) {
   try {
     mailer = require('nodemailer').createTransport({ host: process.env.SMTP_HOST || 'smtp.gmail.com', port: +(process.env.SMTP_PORT || 587), secure: +(process.env.SMTP_PORT || 587) === 465,
       auth: { user: SMTP_USER, pass: process.env.SMTP_PASS } });

@@ -54,6 +54,8 @@ services:
         value: "587"
       - key: SMTP_PASS
         sync: false
+      - key: MAIL_WEBHOOK_URL    # Google Apps Script web-app link (google-apps-script/alert-mailer.gs) — email alerts on the free plan
+        sync: false
       - key: SMS_PROVIDER
         value: fast2sms
       - key: OTP_REQUIRED        # default only — the admin switches student OTP on/off in the Security tab
