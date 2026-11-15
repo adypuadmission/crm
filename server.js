@@ -29,6 +29,8 @@ const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false'; // defaul
 const otpOn = async () => !!(await db.getSetting('otp_required', OTP_REQUIRED));
 const OTP_DEMO = process.env.OTP_DEMO_MODE === 'true';
 const SEND_CONFIRMATION = (process.env.SEND_CONFIRMATION_SMS || 'true') !== 'false';
+// Student confirmation messages (SMS / WhatsApp) — admin switch in the Security tab; OFF until an official SMS pack / WhatsApp is ready
+const studentMsgs = async () => (await db.getSetting('student_msgs', false)) === true && SEND_CONFIRMATION;
 if (OTP_DEMO && IS_PROD) console.warn('⚠  OTP_DEMO_MODE is on in production — OTPs are shown on screen. Turn it off before going live!');
 if (OTP_REQUIRED && sms.provider === 'console' && !OTP_DEMO) console.warn('⚠  SMS_PROVIDER=console: OTPs are only printed in this log, not sent. Configure an SMS provider before going live.');
 
@@ -343,7 +345,7 @@ async function counsellorOf(row) {
   return u && Number(u.active) && /^[6-9]\d{9}$/.test(u.mobile || '') ? { name: u.name, phone: u.mobile } : null;
 }
 async function sendConfirmation(row) {
-  if (!SEND_CONFIRMATION) return;
+  if (!(await studentMsgs())) return;
   const c = await counsellorOf(row);
   const r = await sms.send('confirm', row.mobile, { first: row.student_name.split(' ')[0].slice(0, 20), course: row.course.slice(0, 45), ref: row.ref_no,
     cname: c ? c.name.slice(0, 40) : '', cphone: c ? c.phone : '' });
@@ -369,7 +371,7 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
       : { source: req.body.src === 'qr' ? 'qr' : 'web' };
     const row = await db.insertEnquiry({ ...data, ...attribution, mobile_verified: verified });
     sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
-    res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: SEND_CONFIRMATION, counsellor: await counsellorOf(row) });
+    res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: await studentMsgs(), counsellor: await counsellorOf(row) });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
@@ -501,7 +503,7 @@ async function pushStudent(body, me, sendSms) {
 }
 const teamFilters = (q, me) => ({ q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir, scopeUser: me.id });
 
-app.get('/api/team/me', requireSub, (req, res) => res.json({ user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider }));
+app.get('/api/team/me', requireSub, async (req, res) => res.json({ user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider, studentMsgs: await studentMsgs() }));
 app.get('/api/team/enquiries', requireSub, async (req, res) => {
   const f = teamFilters(req.query, req.user);
   // searching by a full mobile number would let someone confirm numbers — only names, refs and cities are searchable here
@@ -628,7 +630,7 @@ const genPassword = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrs
 app.get('/api/admin/security', requireAdmin, async (req, res) => {
   const [events, unseen, allowReveal, raw] = await Promise.all([db.listAudit({ limit: Math.min(1000, +req.query.limit || 400), severity: req.query.severity || undefined }),
     db.countUnseenAlerts(), db.getSetting('allow_reveal', false), db.rawSample(3)]);
-  res.json({ events, unseen, settings: { allowReveal, otpRequired: await otpOn(), adminSms: await adminSms() },
+  res.json({ events, unseen, settings: { allowReveal, otpRequired: await otpOn(), adminSms: await adminSms(), studentMsgs: await studentMsgs() },
     status: { adminName: ADMIN_NAME, encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, adminSms: await adminSms(), alertEmailTo: sec.maskEmail(ALERT_EMAIL_TO), alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
       smsProvider: sms.provider, https: IS_PROD, sessionHours: SESSION_HOURS, idleMinutes: Number(process.env.IDLE_MINUTES || 15) },
     // what someone opening the database directly would see
@@ -647,8 +649,9 @@ app.post('/api/admin/security/seen', requireAdmin, requireXhr, async (_req, res)
 app.patch('/api/admin/security/settings', requireAdmin, requireXhr, async (req, res) => {
   if (req.body.allowReveal !== undefined) { await db.setSetting('allow_reveal', !!req.body.allowReveal); audit(req, 'setting_changed', `counsellors can view numbers: ${!!req.body.allowReveal ? 'ON' : 'OFF'}`, 'medium'); }
   if (req.body.otpRequired !== undefined) { await db.setSetting('otp_required', !!req.body.otpRequired); audit(req, 'setting_changed', `student mobile OTP: ${req.body.otpRequired ? 'ON' : 'OFF'}`, 'medium'); }
+  if (req.body.studentMsgs !== undefined) { await db.setSetting('student_msgs', !!req.body.studentMsgs); audit(req, 'setting_changed', `student confirmation SMS/WhatsApp: ${req.body.studentMsgs ? 'ON' : 'OFF'}`, 'medium'); }
   if (req.body.adminSms !== undefined) { await db.setSetting('admin_sms', !!req.body.adminSms); audit(req, 'setting_changed', `admin login code + alerts by SMS: ${req.body.adminSms ? 'ON' : 'OFF (email only)'}`, 'medium'); }
-  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false), otpRequired: await otpOn(), adminSms: await adminSms() } });
+  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false), otpRequired: await otpOn(), adminSms: await adminSms(), studentMsgs: await studentMsgs() } });
 });
 
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {

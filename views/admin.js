@@ -483,7 +483,7 @@
   async function loadSecurity() {
     const r = await fetch('/api/admin/security?' + new URLSearchParams({ severity: $('#secSev').value }), { headers: { 'X-Requested-With': 'fetch' } });
     if (!r.ok) return; const j = await r.json();
-    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired; $('#adminSms').checked = !!j.settings.adminSms;
+    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired; $('#adminSms').checked = !!j.settings.adminSms; $('#studentMsgs').checked = !!j.settings.studentMsgs;
     const st = j.status, ok = (b) => (b ? '✅' : '⚠️');
     $('#secStatus').innerHTML = [
       [true, `Encryption at rest: <b>${esc(st.encryption)}</b>`], [st.dataKey, st.dataKey ? 'Dedicated encryption key (DATA_KEY) set' : 'Set a dedicated <code>DATA_KEY</code> in the server settings'],
@@ -508,6 +508,10 @@
     e.target.disabled = false; toast(`SMS: ${r.sms || '?'} · Email: ${r.email || '?'}`); loadSecurity();
   });
   $('#secSeen').addEventListener('click', async () => { await fetch('/api/admin/security/seen', { method: 'POST', headers: { 'X-Requested-With': 'fetch' } }); loadSecurity(); toast('Alerts marked as seen'); });
+  $('#studentMsgs').addEventListener('change', async (e) => {
+    await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ studentMsgs: e.target.checked }) });
+    toast(e.target.checked ? 'Student confirmation messages are ON' : 'Student confirmation messages are OFF'); loadSecurity();
+  });
   $('#adminSms').addEventListener('change', async (e) => {
     await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ adminSms: e.target.checked }) });
     toast(e.target.checked ? 'Login code & alerts: SMS + email' : 'Login code & alerts: email only'); loadSecurity();

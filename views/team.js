@@ -134,6 +134,9 @@
   (async () => {
     const j = await api('/api/team/me');
     ME = j.user; STATUSES = j.statuses; LEVELS = j.levels;
+    if (!j.studentMsgs) { // admin has switched student messages off
+      [F.sendSms, $('#bulkSms')].forEach((c) => { if (c) { c.checked = false; const l = c.closest('label'); if (l) l.hidden = true; } });
+    }
     $('#meChip').textContent = `👤 ${ME.name} · @${ME.username}`;
     const h = +new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false });
     $('#hello').textContent = `${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'}, ${ME.name.split(' ').filter((w) => !/^(dr|mr|mrs|ms|prof)\.?$/i.test(w))[0] || ME.name} 👋`;
