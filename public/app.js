@@ -27,6 +27,11 @@
   const isMobile = (v) => /^[6-9]\d{9}$/.test(v);
 
   const $ = (s, r = document) => r.querySelector(s);
+  // QR attribution: ?src=qr (scanned a poster) and ?ref=<counsellor username> (personal QR); kept for this visit
+  const QS = new URLSearchParams(location.search);
+  const ss = (k, v) => { try { if (v !== undefined) sessionStorage.setItem(k, v); return sessionStorage.getItem(k) || ''; } catch { return v || ''; } };
+  const REF = ss('adypu_ref', QS.get('ref') ? QS.get('ref').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30) : undefined);
+  const SRC = ss('adypu_src', QS.get('src') === 'qr' ? 'qr' : undefined);
   const form = $('#enquiryForm'), coursesEl = $('#courses'), progsEl = $('#progs'), seg = $('.seg');
   const mobileEl = $('#mobile');
 
@@ -39,6 +44,13 @@
     renderProgs(); refreshVerifyUi();
   }).catch(() => {});
 
+  if (REF) {
+    $('#qrImg').src = '/qr.svg?ref=' + encodeURIComponent(REF);
+    $('#qrPoster').href = '/qr-poster.pdf?ref=' + encodeURIComponent(REF);
+    fetch('/api/ref?u=' + encodeURIComponent(REF)).then((r) => r.json()).then((j) => {
+      if (j.name) { const c = $('#refChip'); c.textContent = `🤝 Your counsellor: ${j.name}`; c.hidden = false; }
+    }).catch(() => {});
+  }
   function renderContacts(list) {
     const ini = (n) => n.replace(/^(Dr|Mrs|Mr|Ms|Prof)\.?\s+/i, '').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
     const html = list.map((c) => {
@@ -252,7 +264,7 @@
     const d = {
       student_name: $('#student_name').value, mobile: mobileEl.value, email: $('#email').value.trim(), city: $('#city').value.trim(),
       level, programme: sel.programme || '', branch: sel.branch || '', course: sel.programme ? courseText() : '',
-      consent: $('#consent').checked, website: form.website.value, otpToken: otp.mobile === mobileEl.value ? otp.token : null,
+      consent: $('#consent').checked, website: form.website.value, ref: REF, src: SRC, otpToken: otp.mobile === mobileEl.value ? otp.token : null,
     };
     ['student_name', 'mobile', 'email', 'city', 'course', 'consent'].forEach((f) => setErr(f, ''));
     $('#formMsg').textContent = '';

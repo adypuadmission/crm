@@ -60,6 +60,13 @@ Course names live in **`courses.js`** and city→region rules in **`regions.js`*
 
 ---
 
+## 📱 QR "scan & fill" (website scanner)
+- **Front page (laptop/desktop):** a QR card. Students scan it with their phone camera and the enquiry form opens on the phone. It's hidden on phones, since they're already there.
+- **Printable A4 poster:** `/qr-poster.pdf`, also linked from the front page and from the admin header ("📱 QR poster"), for notice boards, fairs and seminars.
+- **A personal QR for every sub-admin:** shown in their workspace, with a poster download, copy-link and WhatsApp share. Students who scan it are **credited to that counsellor automatically** (pushed by and counsellor), the form shows "Your counsellor: …", and the admin table marks them "📱 Name (QR)". Admins can download each person's poster from the Team tab ("📱 QR").
+- Scans of the general poster are tagged "📱 QR scan" so you can tell them apart from normal website visits.
+- Set `PUBLIC_URL` (e.g. `https://admissions.adypu.edu.in`) once you have a custom domain, so printed QR codes always point to it.
+
 ## Sub-admin (counsellor / partner) module
 **Main admin → 👥 Team tab:** create sub-admin accounts (name, username, mobile; the password is auto-generated or set by you), reset passwords, disable or enable accounts, and see each person's numbers: pushed, this week, counselling, admitted. A disabled account is logged out immediately.
 

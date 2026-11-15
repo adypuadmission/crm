@@ -89,6 +89,7 @@
       ['Added this week', all.filter((r) => r.created_by_id === ME.id && new Date(r.created_at) > wk).length, '📅', ''],
       ['Waiting for a call', all.filter((r) => r.status === 'New').length, '📞', 'warn'], ['Admitted', all.filter((r) => r.status === 'Admitted').length, '🎉', 'good'],
     ];
+    $('#qrCount').textContent = all.filter((r) => r.created_by_id === ME.id && r.source === 'qr-ref').length;
     $('#kpis').innerHTML = k.map(([t, v, i, c]) => `<div class="kpi tk ${c}"><span class="tk-i">${i}</span><div><div class="kt">${t}</div><div class="kv"><b>${v}</b></div></div></div>`).join('');
   }
   function renderTable() {
@@ -101,7 +102,7 @@
       <td><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level)}</span> <b>${esc(r.programme)}</b>${r.branch ? `<br><span class="muted">${esc(r.branch)}</span>` : ''}</td>
       <td><select class="st ${STATUS_CLS[r.status] || ''}">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></td>
       <td><input class="note" value="${esc(r.notes)}" placeholder="Add note…" maxlength="500"></td>
-      <td>${r.created_by_id === ME.id ? '<span class="src me">👤 Added by you</span>' : `<span class="src as">📌 Assigned${r.created_by_name ? ' · ' + esc(r.created_by_name) : ' · website'}</span>`}</td>
+      <td>${r.created_by_id === ME.id && r.source === 'qr-ref' ? '<span class="src qr">📱 Via your QR</span>' : r.created_by_id === ME.id ? '<span class="src me">👤 Added by you</span>' : `<span class="src as">📌 Assigned${r.created_by_name ? ' · ' + esc(r.created_by_name) : ' · website'}</span>`}</td>
       <td class="muted nowrap">${fmt(r.created_at)}</td></tr>`).join('');
   }
   $('#rows').addEventListener('change', async (e) => {
@@ -124,6 +125,13 @@
     $('#cityList').innerHTML = (j.cities || []).map((c) => `<option value="${esc(c)}">`).join('');
     F.status.innerHTML = STATUSES.map((s) => `<option>${esc(s)}</option>`).join('');
     $('#fStatus').insertAdjacentHTML('beforeend', STATUSES.map((s) => `<option>${esc(s)}</option>`).join(''));
+    // personal QR
+    const link = `${location.origin}/?src=qr&ref=${encodeURIComponent(ME.username)}`;
+    $('#myQr').src = '/qr.svg?ref=' + encodeURIComponent(ME.username);
+    $('#myPoster').href = '/qr-poster.pdf?ref=' + encodeURIComponent(ME.username);
+    $('#myLink').textContent = link;
+    $('#waShare').href = 'https://wa.me/?text=' + encodeURIComponent(`Admissions 2027-28 at Ajeenkya DY Patil University, Pune. Enquire in 30 seconds: ${link}`);
+    $('#copyLink').addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied ✓'); } catch { toast(link); } });
     fillProgrammes();
     load();
   })();

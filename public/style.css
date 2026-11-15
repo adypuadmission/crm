@@ -242,3 +242,16 @@ input:focus{outline:none;border-color:var(--orange);background:#fff;box-shadow:0
 .help-list.light .hc-n a{color:var(--muted)}
 .help-list.light .hc-btn.call{background:#eef2ff}
 @media (max-width:980px){.help-card{max-width:none}}
+
+/* ---------- QR "scan & fill" ---------- */
+.qr-card{position:relative;display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:center;max-width:480px;background:linear-gradient(120deg,rgba(240,138,36,.18),rgba(255,255,255,.06));border:1px solid rgba(240,138,36,.45);border-radius:16px;padding:12px 14px}
+.qr-img{background:#fff;border-radius:12px;padding:7px;line-height:0;box-shadow:0 10px 24px -10px rgba(0,0,0,.5);position:relative;overflow:hidden}
+.qr-img img{width:118px;height:118px;display:block}
+.qr-img::after{content:"";position:absolute;left:6px;right:6px;height:2px;top:8px;background:linear-gradient(90deg,transparent,#F08A24,transparent);box-shadow:0 0 10px #F08A24;animation:scanline 2.4s ease-in-out infinite}
+@keyframes scanline{0%{top:8px}50%{top:calc(100% - 10px)}100%{top:8px}}
+.qr-txt{display:grid;gap:5px}
+.qr-txt b{color:#fff;font-size:15px}
+.qr-txt small{color:#dbe4ff;font-size:12.5px;line-height:1.45}
+.qr-txt a{color:var(--gold);font-size:12.5px;font-weight:700;text-decoration:none;border-bottom:1px dashed rgba(255,216,168,.6);justify-self:start}
+.ref-chip{margin-top:8px;display:inline-flex;gap:6px;align-items:center;font-size:12.5px;font-weight:700;color:#9a3412;background:#fff4e6;border:1px solid #fed7aa;border-radius:99px;padding:5px 12px}
+@media (max-width:980px){.qr-card{display:none}}

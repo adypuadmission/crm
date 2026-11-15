@@ -358,7 +358,7 @@
         <td class="nowrap"><a href="tel:+91${esc(r.mobile)}">+91 ${esc(r.mobile)}</a> ${r.mobile_verified ? '<span class="vchip" title="Verified by OTP">✓</span>' : '<span class="uchip" title="Not verified">?</span>'}${r.email ? `<br><a class="muted" href="mailto:${esc(r.email)}">${esc(r.email)}</a>` : ''}</td>
         <td>${r.city ? `${esc(r.city)}<br><span class="rtag">${esc(r.region || 'Other')}</span>` : '<span class="muted">—</span>'}</td>
         <td><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level || 'UG')}</span> <b>${esc(r.programme || r.course)}</b>${r.branch ? `<br><span class="muted">${esc(r.branch)}</span>` : ''}</td>
-        <td>${r.created_by_id ? `<span class="src me">👤 ${esc(r.created_by_name)}</span>` : '<span class="src web">🌐 Website</span>'}</td>
+        <td>${r.source === 'qr-ref' ? `<span class="src qr">📱 ${esc(r.created_by_name)} (QR)</span>` : r.created_by_id ? `<span class="src me">👤 ${esc(r.created_by_name)}</span>` : r.source === 'qr' ? '<span class="src web">📱 QR scan</span>' : '<span class="src web">🌐 Website</span>'}</td>
         <td><select class="cs ${r.counsellor_id ? '' : 'none'}"><option value="">⚠ Unassigned</option>${TEAM.filter((u) => u.active || u.id === r.counsellor_id).map((u) => `<option value="${u.id}" ${u.id === r.counsellor_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></td>
         <td><select class="st ${STATUS_CLS[r.status] || ''}">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></td>
         <td><input class="note" value="${esc(r.notes)}" placeholder="Add note…" maxlength="500"></td>
@@ -482,7 +482,7 @@
       <div class="mem-n"><b>${esc(u.name)}</b><small>@${esc(u.username)}${u.mobile ? ' · ' + esc(u.mobile) : ''} · ${u.active ? ago(u.last_login) : 'disabled'}</small></div>
       <div class="mem-s"><b>${u.pushed}</b><small>pushed</small></div><div class="mem-s"><b>${u.pushedWeek}</b><small>this week</small></div>
       <div class="mem-s"><b>${u.assigned}</b><small>counselling</small></div><div class="mem-s"><b>${u.admitted}</b><small>admitted</small></div>
-      <div class="mem-a"><button class="view">📋 Students</button><button class="reset">🔑 Reset password</button>${u.active ? '<button class="dis">⛔ Disable</button>' : '<button class="ena">✅ Enable</button>'}</div></div>`).join('')
+      <div class="mem-a"><button class="view">📋 Students</button><a class="qrb" href="/qr-poster.pdf?ref=${encodeURIComponent(u.username)}" target="_blank" rel="noopener">📱 QR</a><button class="reset">🔑 Reset password</button>${u.active ? '<button class="dis">⛔ Disable</button>' : '<button class="ena">✅ Enable</button>'}</div></div>`).join('')
       : '<p class="muted small">No sub-admins yet. Create the first one on the left.</p>';
   }
   $('#members').addEventListener('click', async (e) => {

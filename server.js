@@ -13,6 +13,9 @@ const sms = require('./sms');
 const chat = require('./chat');
 const { resolveRegion, CITY_SUGGESTIONS, REGIONS } = require('./regions');
 const CONTACTS = require('./contacts');
+const QRCode = require('qrcode');
+// Public address of the site, used inside QR codes. Set PUBLIC_URL (e.g. https://admissions.adypu.edu.in) once you have a domain.
+const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
 const PORT = process.env.PORT || 3000;
 const ACADEMIC_YEAR = process.env.ACADEMIC_YEAR || '2027–28';
@@ -128,6 +131,71 @@ function validateEnquiry(body) {
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', extensions: ['html'] }));
 
 app.post('/', (_req, res) => res.redirect(303, '/'));
+// ---------- QR codes ("scan to fill on your phone") ----------
+const refSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30);
+function formUrl(req, ref) {
+  const u = new URL((PUBLIC_URL || `${req.protocol}://${req.get('host')}`) + '/');
+  u.searchParams.set('src', 'qr');
+  if (ref) u.searchParams.set('ref', ref);
+  return u.toString();
+}
+app.get('/qr.svg', async (req, res) => {
+  const svg = await QRCode.toString(formUrl(req, refSlug(req.query.ref)), { type: 'svg', errorCorrectionLevel: 'M', margin: 1, color: { dark: '#0B1F4B', light: '#FFFFFF' } });
+  res.type('image/svg+xml').set('Cache-Control', 'public, max-age=3600').send(svg);
+});
+// Name of the counsellor behind a personal QR (only active accounts, only the display name)
+app.get('/api/ref', async (req, res) => {
+  const u = req.query.u ? await db.getUserAuth(refSlug(req.query.u)) : null;
+  res.json(u && Number(u.active) ? { name: u.name } : {});
+});
+// Printable A4 poster with the QR code
+app.get('/qr-poster.pdf', async (req, res) => {
+  const ref = refSlug(req.query.ref);
+  const owner = ref ? await db.getUserAuth(ref) : null;
+  const url = formUrl(req, owner && Number(owner.active) ? ref : '');
+  const png = await QRCode.toBuffer(url, { errorCorrectionLevel: 'M', margin: 1, width: 900, color: { dark: '#0B1F4B', light: '#FFFFFF' } });
+  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: 'ADYPU Admission Enquiry - Scan QR', Author: 'ADYPU Admission Desk' } });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="ADYPU_Admission_QR_Poster${owner ? '_' + ref : ''}.pdf"`);
+  doc.pipe(res);
+  const W = doc.page.width, H = doc.page.height, NAVY = '#0B1F4B', ORANGE = '#F08A24';
+  doc.rect(0, 0, W, 200).fill(NAVY);
+  doc.circle(W - 30, 20, 120).fillOpacity(0.28).fill(ORANGE).fillOpacity(1);
+  doc.circle(20, 110, 70).fillOpacity(0.14).fill('#3B82F6').fillOpacity(1);
+  doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(12).text('AJEENKYA DY PATIL UNIVERSITY  ·  PUNE', 0, 46, { width: W, align: 'center', characterSpacing: 2 });
+  doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(34).text('Your next chapter', 0, 78, { width: W, align: 'center' });
+  doc.fillColor(ORANGE).text('begins here.', 0, 118, { width: W, align: 'center' });
+  doc.fillColor('#DBE4FF').font('Helvetica').fontSize(13).text(`Admissions ${ACADEMIC_YEAR.replace('–', '-')}  ·  UG & PG  ·  Free counselling`, 0, 164, { width: W, align: 'center' });
+  doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(24).text('Scan to enquire in 30 seconds', 0, 236, { width: W, align: 'center' });
+  doc.fillColor('#64748B').font('Helvetica').fontSize(12).text('Open your phone camera, point it at the code and fill the short form.', 0, 268, { width: W, align: 'center' });
+  const qs = 230, qx = (W - qs) / 2, qy = 300;
+  doc.roundedRect(qx - 16, qy - 16, qs + 32, qs + 32, 18).lineWidth(4).strokeColor(ORANGE).stroke();
+  doc.image(png, qx, qy, { width: qs, height: qs });
+  doc.fillColor('#94A3B8').font('Helvetica').fontSize(9).text(url, 40, qy + qs + 26, { width: W - 80, align: 'center' });
+  let y = qy + qs + 46;
+  if (owner && Number(owner.active)) {
+    doc.roundedRect(W / 2 - 170, y, 340, 30, 15).fill('#FFF4E6');
+    doc.fillColor('#9A3412').font('Helvetica-Bold').fontSize(12.5).text(`Your counsellor: ${owner.name}${owner.mobile ? '  ·  ' + owner.mobile : ''}`, W / 2 - 170, y + 9, { width: 340, align: 'center' });
+    y += 42;
+  } else y += 6;
+  doc.moveTo(50, y).lineTo(W - 50, y).lineWidth(0.6).strokeColor('#E2E8F0').stroke();
+  y += 12;
+  const head = (x, t) => doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(12).text(t, x, y);
+  const list = (x, items, w, size = 10.5) => doc.fillColor('#334155').font('Helvetica').fontSize(size).text(items.join('\n'), x, y + 18, { width: w, lineGap: 2.5 });
+  head(50, 'UG'); list(50, LEVELS.UG.map((p) => p.name), 110);
+  head(165, 'PG'); list(165, LEVELS.PG.map((p) => p.name), 80);
+  const br = (LEVELS.UG.find((p) => p.branches) || { branches: [] }).branches.map((b) => b.replace(/^Computer Science & Engineering$/, 'Computer Science & Engg.').replace(/^Electronics & Computer Engineering$/, 'Electronics & Computer Engg.'));
+  head(255, 'B.Tech / M.Tech branches');
+  const half = Math.ceil(br.length / 2);
+  list(255, br.slice(0, half), 150, 9.8); list(410, br.slice(half), 150, 9.8);
+  doc.rect(0, H - 92, W, 92).fill(NAVY);
+  doc.rect(0, H - 96, W, 4).fill(ORANGE);
+  doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(11).text('For further connection & queries', 0, H - 78, { width: W, align: 'center' });
+  doc.fillColor('#FFFFFF').font('Helvetica').fontSize(12).text(CONTACTS.map((c) => `${c.name}  ${c.phone.slice(0, 5)} ${c.phone.slice(5)}`).join('     |     '), 0, H - 58, { width: W, align: 'center' });
+  doc.fillColor('#CBD5F5').fontSize(9).text('D Y Patil Knowledge City, Charholi Bk., Via Lohegaon, Pune - 411081', 0, H - 34, { width: W, align: 'center' });
+  doc.end();
+});
+
 app.get('/api/config', (_req, res) => res.json({ levels: LEVELS, academicYear: ACADEMIC_YEAR, cities: CITY_SUGGESTIONS, otpRequired: OTP_REQUIRED, chips: chat.CHIPS, contacts: CONTACTS }));
 app.get('/api/region', (req, res) => res.json(resolveRegion(String(req.query.city || '').slice(0, 60))));
 
@@ -208,7 +276,12 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
     if (OTP_REQUIRED && !verified) return res.status(401).json({ error: 'Please verify your mobile number with the OTP.', needOtp: true });
     const dup = await db.findRecentDuplicate(data.mobile, data.course);
     if (dup) return res.json({ ok: true, ref_no: dup.ref_no, duplicate: true, name: dup.student_name });
-    const row = await db.insertEnquiry({ ...data, mobile_verified: verified });
+    // Came from a counsellor's personal QR? Credit the enquiry to them.
+    const refUser = req.body.ref ? await db.getUserAuth(refSlug(req.body.ref)) : null;
+    const attribution = refUser && Number(refUser.active)
+      ? { source: 'qr-ref', created_by_id: refUser.id, created_by_name: refUser.name, counsellor_id: refUser.id, counsellor_name: refUser.name }
+      : { source: req.body.src === 'qr' ? 'qr' : 'web' };
+    const row = await db.insertEnquiry({ ...data, ...attribution, mobile_verified: verified });
     sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
     res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: SEND_CONFIRMATION });
   } catch (e) {
@@ -462,6 +535,7 @@ function filterLabel(f) {
   const sortTxt = `Sorted by ${SORTN[f.sort] || 'Date'} (${f.dir === 'asc' ? 'ascending' : 'descending'})`;
   return (parts.length ? parts.join('  |  ') : 'All enquiries') + '  |  ' + sortTxt;
 }
+const pushedLabel = (r) => (r.source === 'qr-ref' ? `${r.created_by_name} (QR)` : r.created_by_name || (r.source === 'qr' ? 'QR scan' : 'Website form'));
 async function exportFilters(q) {
   const f = pickFilters(q);
   if (f.pushedBy) f.pushedByName = f.pushedBy === 'web' ? 'Website form' : ((await db.getUser(parseInt(f.pushedBy, 10))) || {}).name;
@@ -508,7 +582,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   });
   head.height = 22;
   rows.forEach((r, i) => {
-    const row = ws.addRow([i + 1, r.ref_no, r.student_name, r.mobile, r.mobile_verified ? 'Yes' : 'No', r.email || '', r.city || '', r.region || '', r.level, r.programme, r.branch || '—', r.status, r.created_by_name || 'Website form', r.counsellor_name || 'Unassigned', r.notes || '', fmtIST(r.created_at)]);
+    const row = ws.addRow([i + 1, r.ref_no, r.student_name, r.mobile, r.mobile_verified ? 'Yes' : 'No', r.email || '', r.city || '', r.region || '', r.level, r.programme, r.branch || '—', r.status, pushedLabel(r), r.counsellor_name || 'Unassigned', r.notes || '', fmtIST(r.created_at)]);
     row.getCell(4).numFmt = '@';
     row.eachCell((c) => {
       c.alignment = { vertical: 'top', wrapText: true };
@@ -534,7 +608,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   section('By programme', countBy(rows, 'programme'));
   section('By engineering branch', countBy(rows.filter((r) => r.branch), 'branch'));
   section('By status', countBy(rows, 'status'));
-  section('By pushed by', countBy(rows.map((r) => ({ k: r.created_by_name || 'Website form' })), 'k'));
+  section('By pushed by', countBy(rows.map((r) => ({ k: pushedLabel(r) })), 'k'));
   section('By counsellor', countBy(rows.map((r) => ({ k: r.counsellor_name || 'Unassigned' })), 'k'));
   section('By region', countBy(rows.map((r) => ({ ...r, region: r.region || 'Not given' })), 'region'));
   section('By date (IST)', countByDate(rows));
@@ -593,7 +667,7 @@ app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   drawHead();
   doc.font('Helvetica').fontSize(8.5);
   rows.forEach((r, i) => {
-    const vals = [i + 1, r.ref_no, r.student_name, `${r.mobile}${r.mobile_verified ? '  (verified)' : ''}`, r.city ? `${r.city}\n${r.region || ''}` : '—', `${r.level} · ${r.programme}${r.branch ? '\n' + r.branch : ''}`, r.status, `${r.created_by_name || 'Website'}\n→ ${r.counsellor_name || 'Unassigned'}`, fmtIST(r.created_at)];
+    const vals = [i + 1, r.ref_no, r.student_name, `${r.mobile}${r.mobile_verified ? '  (verified)' : ''}`, r.city ? `${r.city}\n${r.region || ''}` : '—', `${r.level} · ${r.programme}${r.branch ? '\n' + r.branch : ''}`, r.status, `${pushedLabel(r)}\n→ ${r.counsellor_name || 'Unassigned'}`, fmtIST(r.created_at)];
     const h = Math.max(18, ...vals.map((v, k) => doc.heightOfString(String(v), { width: cols[k][1] - 8 }) + 8));
     if (doc.y + h > doc.page.height - 50) { doc.addPage(); header(); doc.y = 82; drawHead(); doc.font('Helvetica').fontSize(8.5); }
     const y = doc.y;
