@@ -132,6 +132,28 @@ Indian SMS rules (TRAI DLT) require a registered **sender ID** and **approved te
 - **Default (free):** it answers from the built-in knowledge base taken from adypu.edu.in.
 - **AI mode:** set `ANTHROPIC_API_KEY` and Claude answers questions in natural language, in English, Hindi or Marathi. It's still restricted to the same facts and told never to invent fees, rankings or approvals. If the AI is unavailable, it falls back to the knowledge base automatically.
 
+## 🛡️ Data protection (maximum security mode)
+
+**Only the main admin can see full contact details or download data.**
+
+| Protection | What it does |
+|---|---|
+| **Encryption at rest** | Student name, mobile, email and notes are encrypted with **AES-256-GCM** before they reach the database. Anyone opening the database directly (hosting staff, a leaked backup) sees only `enc:v1:…` ciphertext. Mobile look-ups use a keyed hash (blind index), never the plain number. |
+| **Masked for counsellors** | Sub-admins only ever receive `98XXXXXX10` / `p•••@gmail.com` from the server — the full number never reaches their browser. Searching by mobile digits is blocked and logged. |
+| **Optional "Call" button** | Off by default. If the admin switches it on (Security tab), a counsellor can see one number for 20 seconds to call; each view is logged and alerted. |
+| **Downloads: admin only** | Excel/PDF exports exist only for the main admin. Every download is logged; each PDF page carries a CONFIDENTIAL watermark plus "downloaded by admin · time · IP". |
+| **Instant alerts** | SMS to `ADMIN_MOBILE` (and email if SMTP is set) when a sub-admin tries the admin area or a download, copies / prints / screenshots data, opens developer tools, an account is locked, a session is reused on another device, or unusual request volume appears. Alerts also show as a red badge in the dashboard. |
+| **Screen protection** | Sub-admin pages carry a moving-proof watermark (name · @username · IP · time), block copy, cut, right-click, drag, select-all, print, save-page; data blurs when the window loses focus (snipping tools) or PrintScreen is pressed. Main admin pages carry a "CONFIDENTIAL · MAIN ADMIN" watermark. |
+| **Admin 2-step login** | Password + 6-digit OTP sent to `ADMIN_MOBILE`. |
+| **Lockout** | 5 wrong passwords → account locked 15 minutes + critical alert. |
+| **Sessions** | Signed HttpOnly cookie, bound to the browser it was issued to (a stolen cookie fails elsewhere and raises an alert), expires in 6 h, auto sign-out after 15 min idle, password reset signs a counsellor out everywhere. |
+| **No caching** | `Cache-Control: no-store` on every private page, API and export; HTTPS forced in production. |
+| **Security log** | Security tab lists every sign-in, failure, export, change and attempt, with IP and device. |
+
+> **Honest limits:** no website can physically stop someone photographing a screen with a phone. That is why counsellors never receive the full numbers at all, and why every screen carries a watermark identifying the person — any leaked photo can be traced.
+
+**Before going live set:** `DATA_KEY` (Render generates it — download a copy and keep it safe), `ADMIN_MOBILE`, `ADMIN_PASSWORD`, `SMS_PROVIDER`, and `OTP_DEMO_MODE=false`.
+
 ## Security built in
 - **Admin login:** bcrypt password and a signed HttpOnly cookie that lasts 8 hours. Logins are rate-limited.
 - **Abuse protection:** rate limits on the form, OTP and chatbot; a bot honeypot; server-side validation; parameterised SQL; Helmet security headers with a strict Content-Security-Policy; admin pages hidden from search engines.

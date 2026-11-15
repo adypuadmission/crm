@@ -48,6 +48,7 @@
     const [j, everything] = await Promise.all([api('/api/admin/enquiries?' + qs), api('/api/admin/enquiries')]);
     rows = j.rows; allRows = everything.rows; STATUSES = j.statuses; LEVELS = j.levels || LEVELS; TEAM = j.team || []; fillTeamSelects();
     if (!inited) init(j);
+    if (j.unseenAlerts !== undefined) setAlerts(j.unseenAlerts);
     render();
   }
   function init(j) {
@@ -422,6 +423,7 @@
     document.querySelectorAll('.tab').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-selected', on); });
     document.querySelectorAll('.tabpane').forEach((p) => { p.hidden = p.id !== 'tab-' + b.dataset.tab; });
     if (b.dataset.tab === 'team') loadTeam();
+    if (b.dataset.tab === 'security') loadSecurity();
   });
   document.querySelectorAll('th.sortable').forEach((th) => th.addEventListener('click', () => {
     const k = th.dataset.sort;
@@ -473,6 +475,40 @@
     box.innerHTML = `<b>${esc(title)}</b><span>Username: <code>${esc(user.username)}</code></span><span>Password: <code>${esc(password)}</code></span><small>Copy it now: it won't be shown again. Login page: /admin/login</small>`;
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
+  // ---------- Security tab ----------
+  function setAlerts(n) { const c = $('#alertCount'); c.textContent = n; c.hidden = !n; }
+  const SEV = { critical: ['🔴', 'Critical'], high: ['🟠', 'Alert'], medium: ['🟡', 'Watch'], low: ['⚪', 'Low'], info: ['🟢', 'Info'] };
+  const uaShort = (ua) => { ua = String(ua || ''); const b = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Other';
+    const o = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac OS/.test(ua) ? 'Mac' : /Linux/.test(ua) ? 'Linux' : ''; return `${b}${o ? ' · ' + o : ''}`; };
+  async function loadSecurity() {
+    const r = await fetch('/api/admin/security?' + new URLSearchParams({ severity: $('#secSev').value }), { headers: { 'X-Requested-With': 'fetch' } });
+    if (!r.ok) return; const j = await r.json();
+    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal;
+    const st = j.status, ok = (b) => (b ? '✅' : '⚠️');
+    $('#secStatus').innerHTML = [
+      [true, `Encryption at rest: <b>${esc(st.encryption)}</b>`], [st.dataKey, st.dataKey ? 'Dedicated encryption key (DATA_KEY) set' : 'Set a dedicated <code>DATA_KEY</code> in the server settings'],
+      [true, 'Counsellors see masked numbers only · no downloads for anyone but you'], [st.twoFA, st.twoFA ? `Admin login needs an OTP sent to +91 ${esc(st.alertMobile)}` : 'Set <code>ADMIN_MOBILE</code> to turn on OTP login + SMS alerts'],
+      [!!st.alertMobile || st.alertEmail, `Alerts: ${st.alertMobile ? 'SMS to +91 ' + esc(st.alertMobile) : 'dashboard only'}${st.alertEmail ? ' + email' : ''}`],
+      [st.https, st.https ? 'HTTPS enforced · secure cookies' : 'Running in development mode (no HTTPS)'],
+      [true, `Sessions expire after ${st.sessionHours} h, sign-out after ${st.idleMinutes} min idle, tied to one browser`],
+      [true, 'Account locks for 15 min after 5 wrong passwords · every action is logged'],
+    ].map(([g, t]) => `<li>${ok(g)} <span>${t}</span></li>`).join('');
+    $('#rawSample').innerHTML = j.rawSample.length ? j.rawSample.map((x) => `<div><code>${esc(x.ref_no)}</code><span>name: <i>${esc(x.student_name)}</i></span><span>mobile: <i>${esc(x.mobile)}</i></span></div>`).join('') : '<p class="muted small">No records yet.</p>';
+    const alerts = j.events.filter((e) => ['high', 'critical'].includes(e.severity)).length;
+    $('#secSum').textContent = `${j.events.length} events · ${alerts} alerts · ${j.unseen} not yet seen`;
+    $('#secRows').innerHTML = j.events.length ? j.events.map((e) => `<tr class="sev-${esc(e.severity)}${!Number(e.seen) && ['high', 'critical'].includes(e.severity) ? ' unseen' : ''}">
+      <td class="nowrap">${fmt(e.at)}</td><td class="nowrap">${(SEV[e.severity] || SEV.info)[0]} ${(SEV[e.severity] || SEV.info)[1]}</td>
+      <td><b>${esc(e.actor)}</b><br><span class="muted small">${esc(e.role)}</span></td><td>${esc(String(e.action).replace(/_/g, ' '))}</td>
+      <td class="small">${esc(e.details)}</td><td class="small muted">${esc(e.ip)}<br>${esc(uaShort(e.ua))}</td></tr>`).join('') : '<tr><td colspan="6" class="empty">No events yet.</td></tr>';
+  }
+  $('#secSev').addEventListener('change', loadSecurity);
+  $('#secSeen').addEventListener('click', async () => { await fetch('/api/admin/security/seen', { method: 'POST', headers: { 'X-Requested-With': 'fetch' } }); loadSecurity(); toast('Alerts marked as seen'); });
+  $('#allowReveal').addEventListener('change', async (e) => {
+    await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ allowReveal: e.target.checked }) });
+    toast(e.target.checked ? 'Counsellors can now view a number to call (each view is logged)' : 'Counsellors see masked numbers only'); loadSecurity();
+  });
+  setInterval(async () => { try { const r = await fetch('/api/admin/security?limit=1', { headers: { 'X-Requested-With': 'fetch' } }); if (r.ok) { const j = await r.json(); const prev = +$('#alertCount').textContent; setAlerts(j.unseen); if (j.unseen > prev) toast(`🚨 ${j.unseen - prev} new security alert(s) — see the Security tab`); } } catch {} }, 30000);
+
   async function loadTeam() {
     const j = await api('/api/admin/users');
     const us = j.users || [];

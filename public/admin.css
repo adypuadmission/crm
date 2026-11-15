@@ -363,3 +363,31 @@ body{background:radial-gradient(900px 400px at 100% -10%,rgba(240,138,36,.10),tr
 .src.qr{background:#fff4e6;color:#c2410c}
 .mem-a .qrb{border:1.5px solid var(--line);background:#fff;border-radius:9px;padding:6px 9px;font-size:12px;font-weight:700;color:var(--navy);text-decoration:none}
 @media(max-width:900px){.myqr{grid-template-columns:1fr;justify-items:start}}
+
+/* ---------- security ---------- */
+.guard-wm{position:fixed;inset:0;z-index:9998;pointer-events:none;background-repeat:repeat}
+.guard-sub body{-webkit-user-select:none;user-select:none}
+.guard-sub input,.guard-sub textarea,.guard-sub select{-webkit-user-select:text;user-select:text}
+.guard-blur main,.guard-blur .table-wrap{filter:blur(14px);transition:filter .1s}
+@media print{.guard-sub body *{visibility:hidden!important}.guard-sub body::after{content:"Printing ADYPU student data is not permitted.";visibility:visible;position:fixed;top:40%;left:0;right:0;text-align:center;font:700 22px sans-serif}}
+.guard-toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%) translateY(20px);opacity:0;z-index:9999;background:#7F1D1D;color:#fff;padding:12px 18px;border-radius:12px;font-weight:600;box-shadow:0 12px 30px rgba(0,0,0,.25);transition:.25s;pointer-events:none;max-width:92vw;text-align:center}
+.guard-toast.show{opacity:1;transform:translateX(-50%)}
+.mask{font-variant-numeric:tabular-nums;color:#334155;letter-spacing:.02em}
+.btn.xs{padding:3px 8px;font-size:11.5px;border-radius:8px}
+.tab-count.alert{background:#DC2626;color:#fff;animation:pulse 1.6s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 6px rgba(220,38,38,.18)}}
+.sec-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px}
+.sec-status{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:13.5px}
+.sec-status li{display:flex;gap:8px;align-items:flex-start}
+.switch-row{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid #E2E8F0;border-radius:12px;cursor:pointer}
+.switch-row input{width:20px;height:20px;margin-top:2px;accent-color:#DC2626}
+.switch-row small{display:block;color:#64748B;font-weight:400;margin-top:3px}
+.raw{display:grid;gap:8px;font-size:12px}
+.raw div{display:grid;gap:2px;padding:8px 10px;background:#0F172A;color:#94F3B0;border-radius:10px;font-family:ui-monospace,monospace;overflow:hidden}
+.raw code{color:#FCD34D}.raw i{font-style:normal;word-break:break-all}
+.ch-actions{display:flex;gap:8px;align-items:center}
+.sec-table tr.unseen td{background:#FFF7ED}
+.sec-table tr.sev-critical td:first-child{border-left:4px solid #DC2626}
+.sec-table tr.sev-high td:first-child{border-left:4px solid #F97316}
+.otp-msg{font-size:13px;background:#EFF6FF;border:1px solid #BFDBFE;padding:10px;border-radius:10px;color:#1E3A8A}
+.sec-note{font-size:11.5px;color:#64748B;text-align:center;margin:10px 0 0}

@@ -6,7 +6,7 @@
   const fmt = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   const istDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const STATUS_CLS = { 'New': 's-new', 'Contacted': 's-contacted', 'Interested': 's-interested', 'Counselling Done': 's-counsel', 'Applied': 's-applied', 'Admitted': 's-admitted', 'Not Interested': 's-no' };
-  let ME = null, STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [];
+  let ALLOW_REVEAL = false, ME = null, STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [];
   function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
 
   // ---------- add form: Level → Programme → Branch ----------
@@ -80,7 +80,7 @@
     if ($('#from').value) p.set('from', $('#from').value);
     if ($('#to').value) p.set('to', $('#to').value);
     const [mine, all] = await Promise.all([api('/api/team/enquiries?' + p), api('/api/team/enquiries')]);
-    rows = mine.rows; renderKpis(all.rows); renderTable();
+    rows = mine.rows; ALLOW_REVEAL = !!mine.allowReveal; renderKpis(all.rows); renderTable();
   }
   function renderKpis(all) {
     const today = istDay(Date.now()), wk = Date.now() - 7 * 864e5;
@@ -97,7 +97,7 @@
     if (!rows.length) { $('#rows').innerHTML = '<tr><td colspan="10" class="empty">No students yet. Add one above or upload a file.</td></tr>'; return; }
     $('#rows').innerHTML = rows.map((r, i) => `<tr data-id="${r.id}">
       <td class="muted">${i + 1}</td><td><code>${esc(r.ref_no)}</code></td><td><b>${esc(r.student_name)}</b></td>
-      <td class="nowrap"><a href="tel:+91${esc(r.mobile)}">+91 ${esc(r.mobile)}</a>${r.email ? `<br><span class="muted">${esc(r.email)}</span>` : ''}</td>
+      <td class="nowrap"><span class="mask" title="Hidden for privacy — only the main admin can see full numbers">🔒 +91 ${esc(r.mobile)}</span>${ALLOW_REVEAL ? ` <button class="btn xs reveal" type="button">📞 Call</button>` : ''}${r.email ? `<br><span class="muted">${esc(r.email)}</span>` : ''}</td>
       <td>${esc(r.city || '—')}</td>
       <td><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level)}</span> <b>${esc(r.programme)}</b>${r.branch ? `<br><span class="muted">${esc(r.branch)}</span>` : ''}</td>
       <td><select class="st ${STATUS_CLS[r.status] || ''}">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></td>
@@ -105,6 +105,15 @@
       <td>${r.created_by_id === ME.id && r.source === 'qr-ref' ? '<span class="src qr">📱 Via your QR</span>' : r.created_by_id === ME.id ? '<span class="src me">👤 Added by you</span>' : `<span class="src as">📌 Assigned${r.created_by_name ? ' · ' + esc(r.created_by_name) : ' · website'}</span>`}</td>
       <td class="muted nowrap">${fmt(r.created_at)}</td></tr>`).join('');
   }
+  $('#rows').addEventListener('click', async (e) => {
+    const b = e.target.closest('.reveal'); if (!b) return;
+    const tr = b.closest('tr');
+    if (!confirm('The number will be shown for 20 seconds so you can call. This is recorded and the admin is informed. Continue?')) return;
+    const j = await api(`/api/team/enquiries/${tr.dataset.id}/reveal`, { method: 'POST' });
+    if (!j.mobile) return toast(j.error || 'Not allowed');
+    const a = document.createElement('a'); a.href = 'tel:+91' + j.mobile; a.className = 'btn xs primary'; a.textContent = '📞 Tap to call';
+    b.replaceWith(a); setTimeout(() => { if (a.isConnected) a.remove(); }, 20000);
+  });
   $('#rows').addEventListener('change', async (e) => {
     const tr = e.target.closest('tr'); if (!tr) return;
     const patch = e.target.classList.contains('st') ? { status: e.target.value } : e.target.classList.contains('note') ? { notes: e.target.value } : null;

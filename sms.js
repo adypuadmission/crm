@@ -9,6 +9,7 @@ const CONTACT_LINE = CONTACTS.map((c) => `${c.name} ${c.phone}`).join(' or ');
 const env = (k, d = '') => process.env[k] || d;
 
 const OTP_TEXT = (otp) => `${otp} is your OTP to verify your mobile number for ADYPU admission enquiry. Valid for 5 minutes. Do not share it with anyone. - ADYPU`;
+const ALERT_TEXT = (d) => `ADYPU CRM security alert: ${String(d.text).replace(/[^\x20-\x7E]/g, '').slice(0, 110)}. Please check the admin dashboard. - ADYPU`;
 // Plain ASCII keeps the SMS in GSM encoding (160 chars per part instead of 70).
 const CONFIRM_TEXT = (e) => `Dear ${e.first}, thank you for your enquiry for ${String(e.course).replace(/[–—]/g, '-')} at Ajeenkya DY Patil University. Ref No: ${e.ref}. For queries call ${CONTACT_LINE}. - ADYPU`;
 
@@ -22,7 +23,7 @@ async function post(url, opts) {
 const providers = {
   // Prints messages to the server log. For local testing only — nothing is delivered.
   async console(kind, mobile, data) {
-    const text = kind === 'otp' ? OTP_TEXT(data.otp) : CONFIRM_TEXT(data);
+    const text = kind === 'otp' ? OTP_TEXT(data.otp) : kind === 'alert' ? ALERT_TEXT(data) : CONFIRM_TEXT(data);
     console.log(`[SMS:console] to +91${mobile}: ${text}`);
     return { ok: true };
   },
@@ -36,9 +37,9 @@ const providers = {
       const r = await post(`https://control.msg91.com/api/v5/otp?${qs}`, { method: 'POST', headers, body: '{}' });
       return { ok: r.ok && r.body?.type !== 'error', detail: r.body };
     }
-    const r = await post('https://control.msg91.com/api/v5/flow', { method: 'POST', headers, body: JSON.stringify({
-      template_id: env('MSG91_CONFIRM_TEMPLATE_ID'), short_url: '0',
-      recipients: [{ mobiles: `91${mobile}`, name: data.first, course: data.course, ref: data.ref }] }) });
+    const r = await post('https://control.msg91.com/api/v5/flow', { method: 'POST', headers, body: JSON.stringify(kind === 'alert'
+      ? { template_id: env('MSG91_ALERT_TEMPLATE_ID'), short_url: '0', recipients: [{ mobiles: `91${mobile}`, text: String(data.text).slice(0, 110) }] }
+      : { template_id: env('MSG91_CONFIRM_TEMPLATE_ID'), short_url: '0', recipients: [{ mobiles: `91${mobile}`, name: data.first, course: data.course, ref: data.ref }] }) });
     return { ok: r.ok && r.body?.type !== 'error', detail: r.body };
   },
 
@@ -49,6 +50,9 @@ const providers = {
     const headers = { authorization: env('FAST2SMS_API_KEY'), 'Content-Type': 'application/json', accept: 'application/json' };
     let body;
     if (kind === 'otp') body = { route: 'otp', variables_values: data.otp, numbers: mobile };
+    else if (kind === 'alert') body = env('FAST2SMS_ALERT_MESSAGE_ID')
+      ? { route: 'dlt', sender_id: env('FAST2SMS_SENDER_ID'), message: env('FAST2SMS_ALERT_MESSAGE_ID'), variables_values: String(data.text).replace(/\|/g, '/').slice(0, 110), numbers: mobile, flash: 0 }
+      : { route: 'q', message: ALERT_TEXT(data), numbers: mobile, flash: 0 };
     else if (env('FAST2SMS_CONFIRM_ROUTE', 'dlt') === 'q') body = { route: 'q', message: CONFIRM_TEXT(data), numbers: mobile, flash: 0 };
     else body = { route: 'dlt', sender_id: env('FAST2SMS_SENDER_ID'), message: env('FAST2SMS_CONFIRM_MESSAGE_ID'),
       variables_values: `${data.first}|${data.course}|${data.ref}`, numbers: mobile, flash: 0 };
@@ -59,7 +63,7 @@ const providers = {
   // Twilio Programmable Messaging (international; Indian delivery still needs DLT registration).
   async twilio(kind, mobile, data) {
     const sid = env('TWILIO_ACCOUNT_SID'), tok = env('TWILIO_AUTH_TOKEN');
-    const form = new URLSearchParams({ To: `+91${mobile}`, Body: kind === 'otp' ? OTP_TEXT(data.otp) : CONFIRM_TEXT(data) });
+    const form = new URLSearchParams({ To: `+91${mobile}`, Body: kind === 'otp' ? OTP_TEXT(data.otp) : kind === 'alert' ? ALERT_TEXT(data) : CONFIRM_TEXT(data) });
     if (env('TWILIO_MESSAGING_SERVICE_SID')) form.set('MessagingServiceSid', env('TWILIO_MESSAGING_SERVICE_SID')); else form.set('From', env('TWILIO_FROM'));
     const r = await post(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, { method: 'POST',
       headers: { Authorization: 'Basic ' + Buffer.from(`${sid}:${tok}`).toString('base64'), 'Content-Type': 'application/x-www-form-urlencoded' }, body: form });
@@ -80,4 +84,4 @@ async function send(kind, mobile, data) {
   }
 }
 
-module.exports = { send, provider: P, OTP_TEXT, CONFIRM_TEXT };
+module.exports = { send, provider: P, OTP_TEXT, CONFIRM_TEXT, ALERT_TEXT };

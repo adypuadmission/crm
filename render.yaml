@@ -17,6 +17,18 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      - key: DATA_KEY            # encrypts student names, mobiles, emails. NEVER change or lose it.
+        generateValue: true
+      - key: ADMIN_MOBILE        # admin login OTP + security alert SMS
+        sync: false
+      - key: ALERT_EMAIL_TO
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
       - key: SMS_PROVIDER
         value: console
       - key: OTP_REQUIRED

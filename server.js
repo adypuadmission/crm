@@ -14,6 +14,7 @@ const chat = require('./chat');
 const { resolveRegion, CITY_SUGGESTIONS, REGIONS } = require('./regions');
 const CONTACTS = require('./contacts');
 const QRCode = require('qrcode');
+const sec = require('./sec');
 // Public address of the site, used inside QR codes. Set PUBLIC_URL (e.g. https://admissions.adypu.edu.in) once you have a domain.
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
@@ -38,6 +39,18 @@ if (!ADMIN_HASH) {
   ADMIN_HASH = bcrypt.hashSync(pw, 12);
 }
 if (!process.env.SESSION_SECRET) console.warn('⚠  SESSION_SECRET not set — admin sessions reset on every restart.');
+// Security alerts + admin two-step login go to this mobile (and optionally email)
+const ADMIN_MOBILE = String(process.env.ADMIN_MOBILE || '').replace(/\D/g, '').slice(-10);
+const ADMIN_2FA = !!ADMIN_MOBILE && process.env.ADMIN_2FA !== 'false';
+if (!ADMIN_MOBILE) console.warn('⚠  ADMIN_MOBILE not set — security alerts will appear only in the dashboard and admin login has no OTP step.');
+const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
+let mailer = null;
+if (ALERT_EMAIL_TO && process.env.SMTP_HOST) {
+  try {
+    mailer = require('nodemailer').createTransport({ host: process.env.SMTP_HOST, port: +(process.env.SMTP_PORT || 587), secure: +(process.env.SMTP_PORT || 587) === 465,
+      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined });
+  } catch (e) { console.error('Email alerts disabled:', e.message); }
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -57,13 +70,20 @@ app.use(helmet({
   },
 }));
 app.use(express.json({ limit: '20kb' }));
+// Never let browsers or proxies cache private pages, data or exports
+app.use(['/admin', '/team', '/api/admin', '/api/team', '/api/security'], (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); res.set('Pragma', 'no-cache'); next(); });
+if (IS_PROD) app.use((req, res, next) => (req.secure || req.get('x-forwarded-proto') === 'https' || req.path === '/healthz' ? next() : res.redirect(301, `https://${req.get('host')}${req.originalUrl}`)));
 
 // ---------- signed session cookie (stateless, HttpOnly) ----------
 const sign = (data) => crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
 // Token payload: { u: username, role: 'admin' | 'sub', id: sub-admin id, n: display name, exp }
-function issueToken(user) {
+// Sessions are bound to the browser (user-agent fingerprint) and, for sub-admins, to the current password.
+const SESSION_HOURS = Number(process.env.SESSION_HOURS || 6);
+const devHash = (req) => crypto.createHash('sha256').update(String(req.get('user-agent') || '')).digest('base64url').slice(0, 16);
+const passVer = (hash) => crypto.createHash('sha256').update(String(hash || '')).digest('base64url').slice(0, 10);
+function issueToken(user, req) {
   const info = typeof user === 'string' ? { u: user, role: 'admin' } : user;
-  const payload = Buffer.from(JSON.stringify({ ...info, exp: Date.now() + 8 * 3600 * 1000 })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ ...info, d: req ? devHash(req) : undefined, exp: Date.now() + SESSION_HOURS * 3600 * 1000 })).toString('base64url');
   return `${payload}.${sign(payload)}`;
 }
 function readToken(req) {
@@ -75,27 +95,59 @@ function readToken(req) {
   if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    return data.exp > Date.now() ? data : null;
+    if (!(data.exp > Date.now())) return null;
+    if (data.d && data.d !== devHash(req)) { req.sessionMismatch = data; return null; }
+    return data;
   } catch { return null; }
 }
 const cookieOpts = `Path=/; HttpOnly; SameSite=Strict${IS_PROD ? '; Secure' : ''}`;
+
+// ---------- audit log & alerts ----------
+const ALERT_GAP = 10 * 60 * 1000;
+const lastAlert = new Map();
+async function notifyAdmin(text, key) {
+  const k = key || text;
+  if (Date.now() - (lastAlert.get(k) || 0) < ALERT_GAP) return; // throttle repeats
+  lastAlert.set(k, Date.now());
+  if (ADMIN_MOBILE) sms.send('alert', ADMIN_MOBILE, { text }).catch(() => {});
+  if (mailer) mailer.sendMail({ from: process.env.SMTP_FROM || process.env.SMTP_USER, to: ALERT_EMAIL_TO, subject: `⚠ ADYPU CRM security alert`,
+    text: `${text}\n\nTime: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST\nOpen the admin dashboard → Security tab for details.` }).catch((e) => console.error('alert email', e.message));
+}
+const SEVERE = new Set(['high', 'critical']);
+async function audit(req, action, details = '', severity = 'info', who) {
+  const t = who || req.user || readToken(req) || {};
+  const actor = t.role === 'admin' || t.u === ADMIN_USER ? 'admin' : t.username || t.u || 'anonymous';
+  const role = t.role === 'sub' ? 'sub-admin' : t.role === 'admin' ? 'admin' : t.username ? 'login attempt' : 'public';
+  try { await db.insertAudit({ actor, role, user_id: t.id, ip: req.ip, ua: req.get('user-agent'), action, details, severity }); } catch (e) { console.error('audit', e.message); }
+  if (SEVERE.has(severity)) notifyAdmin(`${actor} (${role}) - ${action.replace(/_/g, ' ')}${details ? ': ' + String(details).slice(0, 60) : ''}`, `${actor}:${action}`);
+}
 
 const deny = (req, res, msg = 'Please log in again.') => (req.path.startsWith('/api/') ? res.status(401).json({ error: msg }) : res.redirect('/admin/login'));
 // Main admin only
 function requireAdmin(req, res, next) {
   const t = readToken(req);
-  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: 'Admin' }; return next(); }
-  if (t && t.role === 'sub' && !req.path.startsWith('/api/')) return res.redirect('/team');
+  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: 'Admin', u: ADMIN_USER }; return next(); }
+  if (t && t.role === 'sub') {
+    audit(req, 'blocked_admin_access', `${req.method} ${req.originalUrl.split('?')[0]}`, 'high', { ...t, username: t.u });
+    return req.originalUrl.startsWith('/api/') ? res.status(403).json({ error: 'You do not have permission for this. The admin has been notified.' }) : res.redirect('/team');
+  }
+  if (req.sessionMismatch) audit(req, 'session_used_from_other_device', `${req.sessionMismatch.u || ''}`, 'high', { ...req.sessionMismatch, username: req.sessionMismatch.u });
   return deny(req, res);
 }
 // Sub-admin (team member) only; re-checks that the account is still active
+const activity = new Map();
 async function requireSub(req, res, next) {
   const t = readToken(req);
-  if (!t) return deny(req, res);
+  if (!t) { if (req.sessionMismatch) audit(req, 'session_used_from_other_device', req.sessionMismatch.u || '', 'high', { ...req.sessionMismatch, username: req.sessionMismatch.u }); return deny(req, res); }
   if ((t.role || 'admin') === 'admin') return req.path.startsWith('/api/') ? res.status(403).json({ error: 'This area is for sub-admin accounts.' }) : res.redirect('/admin');
-  const u = await db.getUser(t.id);
-  if (!u || !u.active) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
+  const u = await db.getUserAuth(t.u);
+  if (!u || u.id !== t.id || !Number(u.active)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
+  if (t.pv && t.pv !== passVer(u.pass_hash)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your password was changed. Please log in again.'); }
   req.user = { role: 'sub', id: u.id, name: u.name, username: u.username };
+  // Unusual volume of requests (possible scraping) → alert
+  const k = `rate:${u.id}`, now = Date.now(), w = (activity.get(k) || []).filter((x) => now - x < 10 * 60 * 1000);
+  w.push(now); activity.set(k, w);
+  if (w.length === 150) audit(req, 'unusual_activity', `${w.length} requests in 10 minutes`, 'high');
   next();
 }
 // Extra CSRF guard for state-changing admin calls (on top of SameSite=Strict).
@@ -295,26 +347,87 @@ const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHea
   message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
 
 app.get('/admin/login', (_req, res) => res.sendFile(path.join(__dirname, 'views', 'login.html')));
+const fails = new Map(); // username → { n, until }
+const LOCK_AFTER = 5, LOCK_MIN = 15;
+const challenges = new Map(); // admin OTP challenges
+function setSession(res, data, req) { res.setHeader('Set-Cookie', `adm=${issueToken(data, req)}; Max-Age=${SESSION_HOURS * 3600}; ${cookieOpts}`); }
 app.post('/api/admin/login', loginLimiter, requireXhr, async (req, res) => {
   const { username, password } = req.body || {};
-  const uname = String(username || '').trim();
+  const uname = String(username || '').trim().slice(0, 40), key = uname.toLowerCase();
+  const f = fails.get(key);
+  if (f && f.until > Date.now()) {
+    audit(req, 'login_while_locked', uname, 'medium', { username: uname });
+    return res.status(429).json({ error: `Too many wrong attempts. This account is locked for ${Math.ceil((f.until - Date.now()) / 60000)} more minutes.` });
+  }
+  const failed = async () => {
+    const r = fails.get(key) || { n: 0, until: 0 }; r.n += 1;
+    if (r.n >= LOCK_AFTER) { r.until = Date.now() + LOCK_MIN * 60000; r.n = 0; audit(req, 'account_locked', `${uname} after ${LOCK_AFTER} wrong passwords`, 'critical', { username: uname }); }
+    else audit(req, 'login_failed', uname, r.n >= 3 ? 'medium' : 'low', { username: uname });
+    fails.set(key, r);
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  };
   const isMain = uname.length === ADMIN_USER.length && crypto.timingSafeEqual(Buffer.from(uname), Buffer.from(ADMIN_USER));
   if (isMain) {
-    if (!(await bcrypt.compare(String(password || ''), ADMIN_HASH))) return res.status(401).json({ error: 'Invalid username or password.' });
-    res.setHeader('Set-Cookie', `adm=${issueToken({ u: ADMIN_USER, role: 'admin' })}; Max-Age=28800; ${cookieOpts}`);
+    if (!(await bcrypt.compare(String(password || ''), ADMIN_HASH))) return failed();
+    fails.delete(key);
+    if (ADMIN_2FA) {
+      const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0'), id = crypto.randomBytes(16).toString('base64url');
+      challenges.set(id, { hash: sign('2fa:' + code), exp: Date.now() + 5 * 60000, tries: 0, d: devHash(req) });
+      const sent = OTP_DEMO ? { ok: true } : await sms.send('otp', ADMIN_MOBILE, { otp: code });
+      if (!sent.ok) return res.status(502).json({ error: 'Could not send the login OTP. Please try again.' });
+      return res.json({ ok: true, otp: true, challenge: id, sentTo: sec.maskMobile(ADMIN_MOBILE), ...(OTP_DEMO ? { demoOtp: code } : {}) });
+    }
+    setSession(res, { u: ADMIN_USER, role: 'admin' }, req);
+    audit(req, 'admin_login', 'password', 'info', { role: 'admin', u: ADMIN_USER });
     return res.json({ ok: true, role: 'admin', redirect: '/admin' });
   }
   const u = await db.getUserAuth(uname);
   const ok = await bcrypt.compare(String(password || ''), u ? u.pass_hash : ADMIN_HASH); // compare anyway: same timing
-  if (!u || !ok) return res.status(401).json({ error: 'Invalid username or password.' });
-  if (!Number(u.active)) return res.status(403).json({ error: 'This account is disabled. Please contact the admin.' });
+  if (!u || !ok) return failed();
+  if (!Number(u.active)) { audit(req, 'disabled_account_login', uname, 'medium', { username: uname, id: u.id, role: 'sub' }); return res.status(403).json({ error: 'This account is disabled. Please contact the admin.' }); }
+  fails.delete(key);
   await db.touchLogin(u.id);
-  res.setHeader('Set-Cookie', `adm=${issueToken({ u: u.username, role: 'sub', id: u.id, n: u.name })}; Max-Age=28800; ${cookieOpts}`);
+  setSession(res, { u: u.username, role: 'sub', id: u.id, n: u.name, pv: passVer(u.pass_hash) }, req);
+  audit(req, 'sub_admin_login', '', 'info', { role: 'sub', id: u.id, username: u.username });
   res.json({ ok: true, role: 'sub', redirect: '/team' });
 });
-app.post('/api/admin/logout', (_req, res) => {
+app.post('/api/admin/login/verify', loginLimiter, requireXhr, async (req, res) => {
+  const c = challenges.get(String(req.body.challenge || ''));
+  if (!c || c.exp < Date.now() || c.d !== devHash(req)) return res.status(400).json({ error: 'This code has expired. Please sign in again.', restart: true });
+  const code = String(req.body.otp || '').replace(/\D/g, '');
+  const good = code.length === 6 && crypto.timingSafeEqual(Buffer.from(sign('2fa:' + code)), Buffer.from(c.hash));
+  if (!good) {
+    c.tries += 1;
+    if (c.tries >= 5) { challenges.delete(String(req.body.challenge)); audit(req, 'admin_otp_failed', '5 wrong login codes', 'critical', { role: 'admin', u: ADMIN_USER }); return res.status(429).json({ error: 'Too many wrong codes. Please sign in again.', restart: true }); }
+    return res.status(400).json({ error: `Incorrect code. ${5 - c.tries} attempt(s) left.` });
+  }
+  challenges.delete(String(req.body.challenge));
+  setSession(res, { u: ADMIN_USER, role: 'admin' }, req);
+  audit(req, 'admin_login', 'password + mobile OTP', 'info', { role: 'admin', u: ADMIN_USER });
+  res.json({ ok: true, role: 'admin', redirect: '/admin' });
+});
+app.post('/api/admin/logout', (req, res) => {
+  const t = readToken(req); if (t) audit(req, 'logout', '', 'info', { ...t, username: t.u });
   res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`);
   res.json({ ok: true });
+});
+
+// Who is signed in (for the on-screen watermark)
+app.get('/api/security/whoami', (req, res) => {
+  const t = readToken(req); if (!t) return res.status(401).json({});
+  res.json({ role: t.role === 'sub' ? 'sub' : 'admin', name: t.role === 'sub' ? t.n : 'Main Admin', username: t.u, ip: req.ip, idleMinutes: Number(process.env.IDLE_MINUTES || 15) });
+});
+// Copy / print / screenshot / right-click attempts reported by the dashboards
+const EVENTS = { copy: 'copy_attempt', cut: 'copy_attempt', paste: 'paste_attempt', print: 'print_attempt', screenshot: 'screenshot_attempt', contextmenu: 'right_click',
+  selectall: 'select_all_attempt', devtools: 'developer_tools_opened', save: 'save_page_attempt', drag: 'drag_data_attempt' };
+const eventLimiter = rateLimit({ windowMs: 60 * 1000, limit: 30, standardHeaders: false, legacyHeaders: false });
+app.post('/api/security/event', eventLimiter, requireXhr, async (req, res) => {
+  const t = readToken(req); if (!t) return res.status(401).json({});
+  const action = EVENTS[req.body.type]; if (!action) return res.status(400).json({});
+  const isSub = t.role === 'sub';
+  const sev = isSub ? (['copy_attempt', 'print_attempt', 'screenshot_attempt', 'developer_tools_opened', 'save_page_attempt', 'drag_data_attempt', 'select_all_attempt'].includes(action) ? 'high' : 'medium') : 'info';
+  await audit(req, action, `${String(req.body.page || '').slice(0, 40)}${req.body.detail ? ' · ' + String(req.body.detail).slice(0, 80) : ''}`, sev, { ...t, username: t.u });
+  res.json({ ok: true, notified: SEVERE.has(sev) });
 });
 
 app.get('/admin', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'admin.html')));
@@ -324,6 +437,8 @@ app.get('/team/team.js', requireSub, (_req, res) => res.sendFile(path.join(__dir
 
 // ---------- sub-admin (team) API ----------
 const teamRow = (row, me) => row && (row.created_by_id === me.id || row.counsellor_id === me.id);
+// Sub-admins never receive full contact details — only masked values.
+const masked = (r) => r && ({ ...r, mobile: sec.maskMobile(r.mobile), email: r.email ? sec.maskEmail(r.email) : '', mobile_masked: true });
 function teamData(body) {
   const { errors, data } = validateEnquiry({ ...body, consent: true });
   const status = STATUSES.includes(body.status) ? body.status : 'New';
@@ -341,13 +456,27 @@ async function pushStudent(body, me, sendSms) {
 const teamFilters = (q, me) => ({ q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir, scopeUser: me.id });
 
 app.get('/api/team/me', requireSub, (req, res) => res.json({ user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider }));
-app.get('/api/team/enquiries', requireSub, async (req, res) => res.json({ rows: await db.listEnquiries(teamFilters(req.query, req.user)) }));
+app.get('/api/team/enquiries', requireSub, async (req, res) => {
+  const f = teamFilters(req.query, req.user);
+  // searching by a full mobile number would let someone confirm numbers — only names, refs and cities are searchable here
+  if (f.q && /\d{4,}/.test(f.q)) { audit(req, 'mobile_number_search', 'searched by digits', 'medium'); f.q = f.q.replace(/\d/g, ''); }
+  res.json({ rows: (await db.listEnquiries(f)).map(masked), allowReveal: await db.getSetting('allow_reveal', false) });
+});
+// Optional, admin-controlled: let a counsellor see ONE student's number to call them (every reveal is logged and alerted)
+app.post('/api/team/enquiries/:id/reveal', requireSub, requireXhr, async (req, res) => {
+  const row = await db.getEnquiry(parseInt(req.params.id, 10));
+  if (!teamRow(row, req.user)) { audit(req, 'reveal_other_student', `id ${req.params.id}`, 'high'); return res.status(404).json({ error: 'Not found' }); }
+  if (!(await db.getSetting('allow_reveal', false))) { audit(req, 'reveal_denied', row.ref_no, 'medium'); return res.status(403).json({ error: 'Viewing contact numbers is switched off by the admin.' }); }
+  audit(req, 'contact_number_viewed', `${row.ref_no}`, 'medium');
+  res.json({ mobile: row.mobile });
+});
 app.post('/api/team/enquiries', requireSub, requireXhr, async (req, res) => {
   try {
     const r = await pushStudent(req.body, req.user, req.body.sendSms !== false);
     if (r.errors) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: r.errors });
-    if (r.duplicate) return res.status(409).json({ error: `Already in the database as ${r.duplicate.ref_no} (${r.duplicate.student_name}${r.duplicate.created_by_name ? ', pushed by ' + r.duplicate.created_by_name : ', from the website'}).` });
-    res.json({ ok: true, row: await db.getEnquiry(r.row.id) });
+    if (r.duplicate) return res.status(409).json({ error: `This student is already registered (${r.duplicate.ref_no}). Please contact the admin if you need it assigned to you.` });
+    audit(req, 'student_added', r.row.ref_no, 'info');
+    res.json({ ok: true, row: masked(await db.getEnquiry(r.row.id)) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
 });
 app.patch('/api/team/enquiries/:id', requireSub, requireXhr, async (req, res) => {
@@ -356,7 +485,7 @@ app.patch('/api/team/enquiries/:id', requireSub, requireXhr, async (req, res) =>
   const upd = {};
   if (req.body.status !== undefined) { if (!STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Invalid status' }); upd.status = req.body.status; }
   if (req.body.notes !== undefined) upd.notes = String(req.body.notes).slice(0, 500);
-  res.json({ row: await db.updateEnquiry(row.id, upd) });
+  res.json({ row: masked(await db.updateEnquiry(row.id, upd)) });
 });
 
 // Bulk upload: .xlsx or .csv, first row = headers. Columns are matched by name, in any order.
@@ -413,6 +542,7 @@ app.post('/api/team/import', requireSub, requireXhr, importLimiter, express.raw(
       else if (out.duplicate) result.duplicates.push({ line, name: g('student_name'), ref: out.duplicate.ref_no });
       else result.added.push({ line, name: out.row.student_name, ref: out.row.ref_no });
     }
+    audit(req, 'bulk_upload', `${name}: ${result.added.length} added, ${result.duplicates.length} duplicates, ${result.errors.length} errors`, 'info');
     res.json({ ok: true, total: body.length, ...result });
   } catch (e) { console.error(e); res.status(400).json({ error: 'Could not read that file. Please use the template.' }); }
 });
@@ -448,6 +578,22 @@ app.get('/api/team/template.xlsx', requireSub, async (_req, res) => {
 
 // ---------- main admin: team management ----------
 const genPassword = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; return Array.from(crypto.randomBytes(10), (b) => a[b % a.length]).join(''); };
+// ---------- main admin: Security centre ----------
+app.get('/api/admin/security', requireAdmin, async (req, res) => {
+  const [events, unseen, allowReveal, raw] = await Promise.all([db.listAudit({ limit: Math.min(1000, +req.query.limit || 400), severity: req.query.severity || undefined }),
+    db.countUnseenAlerts(), db.getSetting('allow_reveal', false), db.rawSample(3)]);
+  res.json({ events, unseen, settings: { allowReveal },
+    status: { encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
+      smsProvider: sms.provider, https: IS_PROD, sessionHours: SESSION_HOURS, idleMinutes: Number(process.env.IDLE_MINUTES || 15) },
+    // what someone opening the database directly would see
+    rawSample: raw.map((r) => ({ ref_no: r.ref_no, student_name: String(r.student_name || '').slice(0, 30) + '…', mobile: String(r.mobile || '').slice(0, 30) + '…' })) });
+});
+app.post('/api/admin/security/seen', requireAdmin, requireXhr, async (_req, res) => { await db.markAlertsSeen(); res.json({ ok: true }); });
+app.patch('/api/admin/security/settings', requireAdmin, requireXhr, async (req, res) => {
+  if (req.body.allowReveal !== undefined) { await db.setSetting('allow_reveal', !!req.body.allowReveal); audit(req, 'setting_changed', `counsellors can view numbers: ${!!req.body.allowReveal ? 'ON' : 'OFF'}`, 'medium'); }
+  res.json({ ok: true, settings: { allowReveal: await db.getSetting('allow_reveal', false) } });
+});
+
 app.get('/api/admin/users', requireAdmin, async (_req, res) => {
   const [users, rows] = await Promise.all([db.listUsers(), db.listEnquiries({})]);
   const wk = Date.now() - 7 * 864e5;
@@ -466,6 +612,7 @@ app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (await db.getUserAuth(username)) return res.status(409).json({ error: 'That username is already taken.' });
   const user = await db.createUser({ name, username, mobile, pass_hash: await bcrypt.hash(password, 12) });
+  audit(req, 'sub_admin_created', `${name} (@${username})`, 'info');
   res.json({ ok: true, user, password });
 });
 app.patch('/api/admin/users/:id', requireAdmin, requireXhr, async (req, res) => {
@@ -475,7 +622,8 @@ app.patch('/api/admin/users/:id', requireAdmin, requireXhr, async (req, res) => 
   if (req.body.name !== undefined) upd.name = clean(req.body.name, 60);
   if (req.body.mobile !== undefined) upd.mobile = String(req.body.mobile).replace(/\D/g, '').slice(-10);
   if (req.body.active !== undefined) upd.active = !!req.body.active;
-  if (req.body.resetPassword) { password = genPassword(); upd.pass_hash = await bcrypt.hash(password, 12); }
+  if (req.body.resetPassword) { password = genPassword(); upd.pass_hash = await bcrypt.hash(password, 12); audit(req, 'password_reset', `user #${id} (old sessions signed out)`, 'info'); }
+  if (req.body.active !== undefined) audit(req, req.body.active ? 'account_enabled' : 'account_disabled', `user #${id}`, 'info');
   res.json({ ok: true, user: await db.updateUser(id, upd), password });
 });
 
@@ -485,7 +633,7 @@ const pickFilters = (q) => ({ pushedBy: q.pushedBy, counsellor: q.counsellor, q:
 app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
   const rows = await db.listEnquiries(pickFilters(req.query));
   const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active }));
-  res.json({ rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team });
+  res.json({ rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team, unseenAlerts: await db.countUnseenAlerts() });
 });
 
 app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res) => {
@@ -512,6 +660,7 @@ app.post('/api/admin/enquiries/:id/sms', requireAdmin, requireXhr, async (req, r
 });
 
 app.delete('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res) => {
+  const row = await db.getEnquiry(parseInt(req.params.id, 10)); if (row) audit(req, 'enquiry_deleted', row.ref_no, 'medium');
   await db.deleteEnquiry(parseInt(req.params.id, 10));
   res.json({ ok: true });
 });
@@ -554,11 +703,15 @@ function countByDate(rows) {
   return Object.entries(m).sort((a, b) => b[0].localeCompare(a[0]));
 }
 
+const stampLine = (req) => `CONFIDENTIAL · Downloaded by main admin · ${fmtIST(new Date().toISOString())} IST · IP ${req.ip} · Do not share`;
 app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   const f = await exportFilters(req.query);
   const rows = await db.listEnquiries(f);
+  audit(req, 'export_excel', `${rows.length} rows · ${filterLabel(f).slice(0, 120)}`, 'info');
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ADYPU Admission Desk';
+  wb.subject = 'CONFIDENTIAL student data - authorised use only';
+  wb.keywords = `downloaded ${new Date().toISOString()} ip ${req.ip}`;
   const ws = wb.addWorksheet('Enquiries', { views: [{ state: 'frozen', ySplit: 4 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
   const cols = [['Sr.', 6], ['Reference No.', 17], ['Student Name', 26], ['Mobile', 14], ['Verified', 9], ['Email', 28], ['City', 16], ['Region', 24], ['Level', 7], ['Programme', 14], ['Branch', 30], ['Status', 17], ['Pushed By', 20], ['Counsellor', 20], ['Notes', 28], ['Submitted On (IST)', 21]];
   ws.columns = cols.map(([, w]) => ({ width: w }));
@@ -569,7 +722,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   ws.getCell('A1').alignment = { vertical: 'middle', horizontal: 'center' };
   ws.getRow(1).height = 28;
   ws.mergeCells(2, 1, 2, cols.length);
-  ws.getCell('A2').value = `${filterLabel(f)}   •   Total records: ${rows.length}   •   Generated: ${fmtIST(new Date().toISOString())}`;
+  ws.getCell('A2').value = `${filterLabel(f)}   •   Total records: ${rows.length}   •   ${stampLine(req)}`;
   ws.getCell('A2').font = { italic: true, size: 10, color: { argb: 'FF475569' } };
   ws.getCell('A2').alignment = { horizontal: 'center' };
   const head = ws.getRow(4);
@@ -624,6 +777,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
 app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   const f = await exportFilters(req.query);
   const rows = await db.listEnquiries(f);
+  audit(req, 'export_pdf', `${rows.length} rows · ${filterLabel(f).slice(0, 120)}`, 'info');
   const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 36, bufferPages: true, info: { Title: 'ADYPU Admission Enquiries', Author: 'ADYPU Admission Desk' } });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="ADYPU_Admission_Enquiries_${stamp()}.pdf"`);
@@ -714,6 +868,10 @@ app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   for (let p = range.start; p < range.start + range.count; p++) {
     doc.switchToPage(p);
     doc.page.margins.bottom = 0;
+    // diagonal watermark: traces any leaked printout back to this download
+    doc.save().rotate(-28, { origin: [doc.page.width / 2, doc.page.height / 2] }).fillOpacity(0.06).fillColor('#0B1F4B').font('Helvetica-Bold').fontSize(64)
+      .text('CONFIDENTIAL', 0, doc.page.height / 2 - 40, { width: doc.page.width, align: 'center', lineBreak: false }).restore().fillOpacity(1);
+    doc.fillColor('#B91C1C').font('Helvetica').fontSize(7.5).text(stampLine(req), L, doc.page.height - 42, { width: R - L, align: 'center', lineBreak: false });
     doc.fillColor('#94A3B8').fontSize(8).text(`D Y Patil Knowledge City, Charholi Bk., Via Lohegaon, Pune – 411081   •   Page ${p + 1} of ${range.count}`,
       L, doc.page.height - 30, { width: R - L, align: 'center', lineBreak: false });
   }

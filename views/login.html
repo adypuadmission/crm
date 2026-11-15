@@ -16,7 +16,12 @@
     <p class="login-sub">Main admin &amp; sub-admin (counsellor) accounts</p>
     <label>Username<input name="username" autocomplete="username" required></label>
     <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+    <div id="otpStep" hidden>
+      <p class="otp-msg" id="otpMsg"></p>
+      <label>Login code (OTP)<input name="otp" inputmode="numeric" maxlength="6" autocomplete="one-time-code" pattern="\d{6}"></label>
+    </div>
     <button type="submit" class="btn primary wide">Sign in</button>
+    <p class="sec-note">🔐 Protected area · every sign-in and action is recorded</p>
     <p class="err" id="err" role="alert"></p>
     <a class="back" href="/">← Back to enquiry form</a>
   </form>

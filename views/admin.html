@@ -14,6 +14,7 @@
     <button class="tab on" data-tab="insights" role="tab" aria-selected="true">📊 Insights</button>
     <button class="tab" data-tab="table" role="tab" aria-selected="false">📋 Enquiries <span class="tab-count" id="tabCount">0</span></button>
     <button class="tab" data-tab="team" role="tab" aria-selected="false">👥 Team</button>
+    <button class="tab" data-tab="security" role="tab" aria-selected="false">🛡️ Security <span class="tab-count alert" id="alertCount" hidden>0</span></button>
   </nav>
   <div class="tb-actions">
     <span class="sms-pill" id="smsPill" title="SMS provider"></span>
@@ -153,9 +154,34 @@
       </article>
     </div>
   </section>
+
+  <section id="tab-security" class="tabpane" hidden>
+    <div class="sec-grid">
+      <article class="card">
+        <header class="ch"><div><b>🛡️ Protection status</b><small>What keeps student data safe right now</small></div></header>
+        <ul class="sec-status" id="secStatus"></ul>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>🔑 Access control</b><small>Only you (main admin) can see full numbers and download data</small></div></header>
+        <label class="switch-row"><input type="checkbox" id="allowReveal"><span><b>Let counsellors view one number at a time to call</b><small>Off = counsellors only ever see 98XXXXXX10. When on, each view is logged and you get an alert.</small></span></label>
+        <p class="cc-hint">Sub-admins can never download Excel/PDF, open the admin dashboard, copy, print or screenshot the list without you being told.</p>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>🗄️ What the database really stores</b><small>Anyone opening the database directly sees only this</small></div></header>
+        <div class="raw" id="rawSample"></div>
+      </article>
+    </div>
+    <article class="card">
+      <header class="ch"><div><b>🚨 Security log</b><small id="secSum"></small></div>
+        <div class="ch-actions"><select id="secSev"><option value="">All events</option><option value="high">⚠ Alerts only</option></select>
+        <button class="btn ghost" id="secSeen">✓ Mark alerts as seen</button></div></header>
+      <div class="table-wrap"><table class="sec-table"><thead><tr><th>When (IST)</th><th>Severity</th><th>Who</th><th>What happened</th><th>Details</th><th>IP / device</th></tr></thead><tbody id="secRows"></tbody></table></div>
+    </article>
+  </section>
 </main>
 <div class="tip" id="tip" hidden></div>
 <div class="toast" id="toast"></div>
+<script src="/guard.js"></script>
 <script src="/admin/admin.js"></script>
 </body>
 </html>
