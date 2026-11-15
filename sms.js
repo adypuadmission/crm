@@ -50,7 +50,7 @@ const providers = {
     const headers = { authorization: env('FAST2SMS_API_KEY'), 'Content-Type': 'application/json', accept: 'application/json' };
     let body;
     // FAST2SMS_OTP_ROUTE: otp (needs Fast2SMS website verification) | q (Quick SMS, works immediately, higher cost) | dlt
-    const otpRoute = env('FAST2SMS_OTP_ROUTE', 'otp');
+    const otpRoute = env('FAST2SMS_OTP_ROUTE', 'q');
     if (kind === 'otp' && otpRoute === 'q') body = { route: 'q', message: OTP_TEXT(data.otp), numbers: mobile, flash: 0 };
     else if (kind === 'otp' && otpRoute === 'dlt') body = { route: 'dlt', sender_id: env('FAST2SMS_SENDER_ID'), message: env('FAST2SMS_OTP_MESSAGE_ID'), variables_values: String(data.otp), numbers: mobile, flash: 0 };
     else if (kind === 'otp') body = { route: 'otp', variables_values: data.otp, numbers: mobile };
