@@ -567,7 +567,8 @@
   const download = (kind) => { const f = picked(); if (!f.length) return toast('Tick at least one column'); location.href = `/api/admin/export.${kind}?${params()}&fields=${f.join(',')}`; $('#expModal').hidden = true; toast('⬇ Download started · the admin alert email has been sent'); };
   $('#expXlsx').addEventListener('click', () => download('xlsx'));
   $('#expPdf').addEventListener('click', () => download('pdf'));
-  $('#xlsx').addEventListener('click', openExport); $('#pdf').addEventListener('click', openExport);
+  $('#dlBtn').addEventListener('click', openExport);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.modal:not([hidden])').forEach((m) => { m.hidden = true; }); });
   $('#digestNow').addEventListener('click', async (e) => {
     e.target.disabled = true; const j = await api('/api/admin/digest', { method: 'POST' }); e.target.disabled = false;
     toast(j.ok ? `📧 Summary emailed: ${j.untouched} untouched · ${j.overdue} overdue · ${j.dueToday} due today` : (j.error || 'Could not send'));

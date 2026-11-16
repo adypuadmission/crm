@@ -51,8 +51,7 @@
     <div class="chips-row" id="activeChips"></div>
     <span class="spacer"></span>
     <button class="btn ghost" id="reset">↺ Reset</button>
-    <button class="btn excel" id="xlsx" type="button">⬇ Excel</button>
-    <button class="btn pdf" id="pdf" type="button">⬇ PDF</button>
+    <button class="btn excel" id="dlBtn" type="button">⬇ Download</button>
   </div>
 </section>
 
@@ -190,11 +189,11 @@
     <div class="modal-box">
       <header class="modal-h"><b>⬇ Download data</b><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
       <div class="modal-b">
-        <p class="small muted">Tick the columns you need. Your choice is remembered. Rows = exactly what the current filters show (<b id="expRows">0</b>).</p>
+        <p class="small muted">Tick the columns you need, then click <b>Excel</b> or <b>PDF</b>. Your choice is remembered. Rows = exactly what the current filters show (<b id="expRows">0</b>).</p>
         <div class="exp-tools"><input id="expSearch" type="search" placeholder="🔍 Search field"><label class="mini"><input type="checkbox" id="expAll"> Select all</label><button class="btn ghost" id="expReset" type="button">Reset to default</button></div>
         <div class="exp-grid" id="expFields"></div>
       </div>
-      <footer class="modal-f"><span class="small muted" id="expNote"></span><button class="btn excel" id="expXlsx" type="button">⬇ Excel</button><button class="btn pdf" id="expPdf" type="button">⬇ PDF</button></footer>
+      <footer class="modal-f"><span class="small muted" id="expNote"></span><button class="btn ghost" data-close type="button">Cancel</button><button class="btn excel" id="expXlsx" type="button">⬇ Download Excel</button><button class="btn pdf" id="expPdf" type="button">⬇ Download PDF</button></footer>
     </div>
   </div>
   <!-- region rules -->

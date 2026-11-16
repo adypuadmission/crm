@@ -15,6 +15,17 @@ const { resolveRegion, CITY_SUGGESTIONS, REGIONS } = require('./regions');
 const CONTACTS = require('./contacts');
 const QRCode = require('qrcode');
 const sec = require('./sec');
+const fs = require('fs');
+// Cache-busting: every deploy gets a new version, so browsers always load the latest CSS/JS.
+const ASSET_V = (process.env.RENDER_GIT_COMMIT || Date.now().toString(36)).slice(0, 8);
+const viewCache = {};
+function sendView(res, name) {
+  if (!viewCache[name] || !IS_PROD_CACHE) {
+    viewCache[name] = fs.readFileSync(path.join(__dirname, 'views', name), 'utf8')
+      .replace(/(href|src)="(\/[^"?]+\.(?:css|js))"/g, `$1="$2?v=${ASSET_V}"`);
+  }
+  res.set('Cache-Control', 'no-cache').type('html').send(viewCache[name]);
+}
 // Public address of the site, used inside QR codes. Set PUBLIC_URL (e.g. https://admissions.adypu.edu.in) once you have a domain.
 const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
@@ -27,6 +38,7 @@ const CALL_OUTCOMES = ['Connected', 'Not picked', 'Busy', 'Switched off', 'Not r
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 const validDate = (d) => (d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
 const IS_PROD = process.env.NODE_ENV === 'production';
+const IS_PROD_CACHE = IS_PROD;
 // OTP: on by default. OTP_DEMO_MODE=true shows the code on screen (testing only — never in production).
 const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false'; // default; the admin can switch it in the Security tab
 const otpOn = async () => !!(await db.getSetting('otp_required', OTP_REQUIRED));
@@ -402,7 +414,7 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 8, standardHeaders: true, legacyHeaders: false,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' } });
 
-app.get('/admin/login', (_req, res) => res.sendFile(path.join(__dirname, 'views', 'login.html')));
+app.get('/admin/login', (_req, res) => sendView(res, 'login.html'));
 const fails = new Map(); // username → { n, until }
 const LOCK_AFTER = 5, LOCK_MIN = 15;
 const challenges = new Map(); // admin OTP challenges
@@ -498,9 +510,9 @@ app.post('/api/security/event', eventLimiter, requireXhr, async (req, res) => {
   res.json({ ok: true, notified: SEVERE.has(sev) });
 });
 
-app.get('/admin', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'admin.html')));
+app.get('/admin', requireAdmin, (_req, res) => sendView(res, 'admin.html'));
 app.get('/admin/admin.js', requireAdmin, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'admin.js')));
-app.get('/team', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'team.html')));
+app.get('/team', requireSub, (_req, res) => sendView(res, 'team.html'));
 app.get('/team/team.js', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'team.js')));
 
 // ---------- sub-admin (team) API ----------
