@@ -38,6 +38,8 @@
     <select id="verified" aria-label="Verified"><option value="">Verified + unverified</option><option value="yes">✓ Mobile verified</option><option value="no">Not verified</option></select>
     <select id="pushedBy" aria-label="Pushed by"><option value="">All sources</option><option value="web">🌐 Website form</option></select>
     <select id="counsellor" aria-label="Counsellor"><option value="">All counsellors</option><option value="none">⚠ Unassigned</option></select>
+    <select id="caller" aria-label="Caller"><option value="">All callers</option><option value="none">📵 No caller</option></select>
+    <select id="follow" aria-label="Follow-up"><option value="">All follow-ups</option><option value="untouched">🔴 Untouched (never called)</option><option value="overdue">⏰ Follow-up overdue</option><option value="today">📅 Follow-up due today</option><option value="upcoming">🗓 Upcoming follow-ups</option><option value="called">📞 Called at least once</option></select>
     <input id="q" type="search" placeholder="🔍 Name, mobile, city, ref…">
   </div>
   <div class="cmd-row">
@@ -49,8 +51,8 @@
     <div class="chips-row" id="activeChips"></div>
     <span class="spacer"></span>
     <button class="btn ghost" id="reset">↺ Reset</button>
-    <a class="btn excel" id="xlsx">⬇ Excel</a>
-    <a class="btn pdf" id="pdf">⬇ PDF</a>
+    <button class="btn excel" id="xlsx" type="button">⬇ Excel</button>
+    <button class="btn pdf" id="pdf" type="button">⬇ PDF</button>
   </div>
 </section>
 
@@ -102,6 +104,27 @@
 
   <!-- ===================== TABLE ===================== -->
   <section id="tab-table" class="tabpane" hidden>
+    <section class="assign-card" id="assignCard">
+      <div class="as-h"><b>📞 Calling assignment</b><small>Give students to the calling team. This is separate from the counsellor who pushed the data.</small></div>
+      <div class="as-grid">
+        <div class="as-box">
+          <span class="as-t">① Selected students <b id="selCount">0</b></span>
+          <div class="as-row"><select id="selCaller"><option value="">Choose caller…</option></select><button class="btn primary" id="assignSel" type="button">Assign selected</button><button class="btn ghost" id="unassignSel" type="button">Remove caller</button></div>
+          <small class="muted">Tick students in the table (or tick the header box to select the whole page).</small>
+        </div>
+        <div class="as-box">
+          <span class="as-t">② Share all filtered students <b id="fltCount">0</b> fairly</span>
+          <div class="as-callers" id="shareCallers"></div>
+          <div class="as-row"><label class="mini"><input type="checkbox" id="onlyUn" checked> only students without a caller</label><button class="btn primary" id="shareBtn" type="button">Share now</button></div>
+          <small class="muted">Use the filters above (e.g. Region = Nashik, Programme = MBA). Students are split evenly, counting each caller's current workload.</small>
+        </div>
+        <div class="as-box">
+          <span class="as-t">③ Automatic, by region</span>
+          <p class="small">New enquiries go straight to the callers you set for each region (turn by turn).</p>
+          <button class="btn ghost" id="openRules" type="button">⚙ Set region rules</button> <span class="rule-state" id="ruleState"></span>
+        </div>
+      </div>
+    </section>
     <section class="panel">
       <div class="tbl-top">
         <p class="hint" id="hint"></p>
@@ -111,24 +134,26 @@
           <option value="programme:asc">Sort: Programme</option><option value="branch:asc">Sort: Branch</option>
           <option value="name:asc">Sort: Name A→Z</option><option value="status:asc">Sort: Status</option>
           <option value="pushed:asc">Sort: Pushed by</option><option value="counsellor:asc">Sort: Counsellor</option>
+          <option value="caller:asc">Sort: Caller</option><option value="next:asc">Sort: Next follow-up</option><option value="lastcall:desc">Sort: Last called</option>
         </select>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>#</th><th>Ref. No.</th>
+            <th><input type="checkbox" id="selAll" aria-label="Select all"></th><th>#</th><th>Ref. No.</th>
             <th class="sortable" data-sort="name">Student</th>
             <th>Contact</th>
             <th class="sortable" data-sort="region">City / Region</th>
             <th class="sortable" data-sort="programme">Programme / Branch</th>
             <th class="sortable" data-sort="pushed">Pushed by</th>
-            <th class="sortable" data-sort="counsellor">Counsellor</th>
+            <th class="sortable" data-sort="counsellor">Counsellor<br><small>(data)</small></th>
+            <th class="sortable" data-sort="caller">Caller &amp; calls</th>
             <th class="sortable" data-sort="status">Status</th>
             <th>Notes</th>
             <th class="sortable" data-sort="date">Submitted</th>
             <th>SMS</th><th></th>
           </tr></thead>
-          <tbody id="rows"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+          <tbody id="rows"><tr><td colspan="15" class="empty">Loading…</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -137,8 +162,12 @@
   <section id="tab-team" class="tabpane" hidden>
     <div class="team-grid">
       <article class="card">
-        <header class="ch"><div><b>➕ Create a sub-admin</b><small>Counsellors and partners who push student data. They see only their own students.</small></div></header>
+        <header class="ch"><div><b>➕ Create an account</b><small>Two separate kinds of team accounts.</small></div></header>
         <form id="userForm" class="tform" novalidate autocomplete="off">
+          <div class="kind-pick" role="radiogroup" aria-label="Account type">
+            <label><input type="radio" name="kind" value="counsellor" checked><span><b>👤 Counsellor (data entry)</b><small>Adds / uploads students, gets a personal QR. Sees only students they pushed.</small></span></label>
+            <label><input type="radio" name="kind" value="caller"><span><b>📞 Calling team</b><small>Calls only the students you assign, logs result, feedback &amp; next follow-up.</small></span></label>
+          </div>
           <label>Full name *<input name="name" maxlength="60" placeholder="e.g. Mrs. Rebekah Gaware"></label>
           <label>Username *<input name="username" maxlength="30" placeholder="e.g. rebekah"></label>
           <label>WhatsApp mobile *<input name="mobile" inputmode="numeric" maxlength="10" placeholder="students reply to this number"></label>
@@ -150,11 +179,43 @@
         <p class="cc-hint">Share the username, password and the login link <b>/admin/login</b> with the person. They can change nothing outside their own students.</p>
       </article>
       <article class="card">
-        <header class="ch"><div><b>👥 Sub-admins</b><small id="teamSum"></small></div></header>
+        <header class="ch"><div><b>👥 Team</b><small id="teamSum"></small></div><div class="ch-actions"><button class="btn ghost" id="digestNow" type="button">📧 Send today's summary email</button></div></header>
         <div class="members" id="members"><p class="muted small">Loading…</p></div>
       </article>
     </div>
   </section>
+
+  <!-- export column picker -->
+  <div class="modal" id="expModal" hidden>
+    <div class="modal-box">
+      <header class="modal-h"><b>⬇ Download data</b><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
+      <div class="modal-b">
+        <p class="small muted">Tick the columns you need. Your choice is remembered. Rows = exactly what the current filters show (<b id="expRows">0</b>).</p>
+        <div class="exp-tools"><input id="expSearch" type="search" placeholder="🔍 Search field"><label class="mini"><input type="checkbox" id="expAll"> Select all</label><button class="btn ghost" id="expReset" type="button">Reset to default</button></div>
+        <div class="exp-grid" id="expFields"></div>
+      </div>
+      <footer class="modal-f"><span class="small muted" id="expNote"></span><button class="btn excel" id="expXlsx" type="button">⬇ Excel</button><button class="btn pdf" id="expPdf" type="button">⬇ PDF</button></footer>
+    </div>
+  </div>
+  <!-- region rules -->
+  <div class="modal" id="ruleModal" hidden>
+    <div class="modal-box wide">
+      <header class="modal-h"><b>⚙ Auto-assign new enquiries to callers by region</b><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
+      <div class="modal-b">
+        <label class="switch-row"><input type="checkbox" id="ruleOn"><span><b>Turn on automatic assignment</b><small>Every new website / QR enquiry is given to the next caller set for its region. Regions without callers stay unassigned.</small></span></label>
+        <label class="switch-row"><input type="checkbox" id="callOn"><span><b>Callers can call / WhatsApp the students assigned to them</b><small>The number is shown only for a single tap, every dial is logged, and more than 80 dials an hour alerts you.</small></span></label>
+        <div class="rule-grid" id="ruleGrid"></div>
+      </div>
+      <footer class="modal-f"><span></span><button class="btn primary" id="ruleSave" type="button">Save rules</button></footer>
+    </div>
+  </div>
+  <!-- call history -->
+  <div class="modal" id="histModal" hidden>
+    <div class="modal-box">
+      <header class="modal-h"><b id="histTitle">Call history</b><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
+      <div class="modal-b" id="histBody"></div>
+    </div>
+  </div>
 
   <section id="tab-security" class="tabpane" hidden>
     <div class="sec-grid">

@@ -23,6 +23,9 @@ const ACADEMIC_YEAR = process.env.ACADEMIC_YEAR || '2027–28';
 const ADMIN_USER = process.env.ADMIN_USERNAME || 'admin';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const STATUSES = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Applied', 'Admitted', 'Not Interested'];
+const CALL_OUTCOMES = ['Connected', 'Not picked', 'Busy', 'Switched off', 'Not reachable', 'Wrong number', 'Call back later'];
+const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+const validDate = (d) => (d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
 const IS_PROD = process.env.NODE_ENV === 'production';
 // OTP: on by default. OTP_DEMO_MODE=true shows the code on screen (testing only — never in production).
 const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false'; // default; the admin can switch it in the Security tab
@@ -171,7 +174,7 @@ async function requireSub(req, res, next) {
   const u = await db.getUserAuth(t.u);
   if (!u || u.id !== t.id || !Number(u.active)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
   if (t.pv && t.pv !== passVer(u.pass_hash)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your password was changed. Please log in again.'); }
-  req.user = { role: 'sub', id: u.id, name: u.name, username: u.username };
+  req.user = { role: 'sub', id: u.id, name: u.name, username: u.username, kind: u.kind === 'caller' ? 'caller' : 'counsellor' };
   // Unusual volume of requests (possible scraping) → alert
   const k = `rate:${u.id}`, now = Date.now(), w = (activity.get(k) || []).filter((x) => now - x < 10 * 60 * 1000);
   w.push(now); activity.set(k, w);
@@ -347,6 +350,19 @@ async function counsellorOf(row) {
   const u = await db.getUser(row.counsellor_id);
   return u && Number(u.active) && /^[6-9]\d{9}$/.test(u.mobile || '') ? { name: u.name, phone: u.mobile } : null;
 }
+// Region rule → counsellor (round-robin within the region)
+async function autoAssign(row) {
+  try {
+    if (!(await db.getSetting('auto_assign', false))) return null;
+    const ids = ((await db.getSetting('region_rules', {})) || {})[row.region]; if (!ids || !ids.length) return null;
+    const key = 'rr_' + row.region, i = Number(await db.getSetting(key, 0)) || 0;
+    for (let k = 0; k < ids.length; k++) {
+      const u = await db.getUser(ids[(i + k) % ids.length]);
+      if (u && Number(u.active)) { await db.setSetting(key, (i + k + 1) % ids.length); return u; }
+    }
+  } catch (e) { console.error('auto-assign', e.message); }
+  return null;
+}
 async function sendConfirmation(row) {
   if (!(await studentMsgs())) return;
   const c = await counsellorOf(row);
@@ -372,7 +388,8 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
     const attribution = refUser && Number(refUser.active)
       ? { source: 'qr-ref', created_by_id: refUser.id, created_by_name: refUser.name, counsellor_id: refUser.id, counsellor_name: refUser.name }
       : { source: req.body.src === 'qr' ? 'qr' : 'web' };
-    const row = await db.insertEnquiry({ ...data, ...attribution, mobile_verified: verified });
+    let row = await db.insertEnquiry({ ...data, ...attribution, mobile_verified: verified });
+    if (!row.caller_id) { const u = await autoAssign(row); if (u) { await db.assignMany([row.id], u); row = await db.getEnquiry(row.id); } }
     sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
     res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: await studentMsgs(), counsellor: await counsellorOf(row) });
   } catch (e) {
@@ -487,7 +504,7 @@ app.get('/team', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'v
 app.get('/team/team.js', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'team.js')));
 
 // ---------- sub-admin (team) API ----------
-const teamRow = (row, me) => row && (row.created_by_id === me.id || row.counsellor_id === me.id);
+const teamRow = (row, me) => row && (me.kind === 'caller' ? row.caller_id === me.id : (row.created_by_id === me.id || row.counsellor_id === me.id));
 // Sub-admins never receive full contact details — only masked values.
 const masked = (r) => r && ({ ...r, mobile: sec.maskMobile(r.mobile), email: r.email ? sec.maskEmail(r.email) : '', mobile_masked: true });
 function teamData(body) {
@@ -504,9 +521,10 @@ async function pushStudent(body, me, sendSms) {
   if (sendSms) await sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
   return { row };
 }
-const teamFilters = (q, me) => ({ q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir, scopeUser: me.id });
+const teamFilters = (q, me) => ({ follow: q.follow, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir,
+  ...(me.kind === 'caller' ? { scopeCaller: me.id } : { scopeUser: me.id }) });
 
-app.get('/api/team/me', requireSub, async (req, res) => res.json({ user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider, studentMsgs: await studentMsgs() }));
+app.get('/api/team/me', requireSub, async (req, res) => res.json({ kind: req.user.kind, outcomes: CALL_OUTCOMES, assignedCalling: await db.getSetting('assigned_calling', true), user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider, studentMsgs: await studentMsgs() }));
 app.get('/api/team/enquiries', requireSub, async (req, res) => {
   const f = teamFilters(req.query, req.user);
   // searching by a full mobile number would let someone confirm numbers — only names, refs and cities are searchable here
@@ -521,7 +539,49 @@ app.post('/api/team/enquiries/:id/reveal', requireSub, requireXhr, async (req, r
   audit(req, req.body.via === 'whatsapp' ? 'whatsapp_chat_opened' : 'contact_number_viewed', `${row.ref_no}`, 'medium');
   res.json({ mobile: row.mobile, first: String(row.student_name).split(' ')[0], course: row.course, ref: row.ref_no });
 });
+// Secure calling: a counsellor can dial / WhatsApp ONLY students the admin assigned to them (or all of theirs if the admin allows).
+// The number is sent for a single tap, every dial is logged, and unusual dialling volume alerts the admin.
+const dials = new Map();
+app.post('/api/team/enquiries/:id/dial', requireSub, requireXhr, async (req, res) => {
+  const row = await db.getEnquiry(parseInt(req.params.id, 10));
+  if (!teamRow(row, req.user)) { audit(req, 'dial_other_student', `id ${req.params.id}`, 'high'); return res.status(404).json({ error: 'Not found' }); }
+  const assigned = row.caller_id === req.user.id && (await db.getSetting('assigned_calling', true));
+  if (!assigned && !(await db.getSetting('allow_reveal', false))) { audit(req, 'dial_denied', row.ref_no, 'medium'); return res.status(403).json({ error: 'You can call only students the admin assigned to you for calling.' }); }
+  const now = Date.now(), w = (dials.get(req.user.id) || []).filter((t) => now - t < 3600e3); w.push(now); dials.set(req.user.id, w);
+  if (w.length > 80) { audit(req, 'dial_limit_reached', `${w.length} numbers opened in 1 hour`, 'high'); return res.status(429).json({ error: 'Calling limit reached for this hour. The admin has been notified.' }); }
+  const via = req.body.via === 'whatsapp' ? 'whatsapp' : 'call';
+  audit(req, via === 'whatsapp' ? 'whatsapp_opened' : 'call_started', row.ref_no, 'info');
+  res.json({ mobile: row.mobile, first: String(row.student_name).split(' ')[0], course: row.course, ref: row.ref_no, via });
+});
+app.get('/api/team/enquiries/:id/calls', requireSub, async (req, res) => {
+  const row = await db.getEnquiry(parseInt(req.params.id, 10));
+  if (!teamRow(row, req.user)) return res.status(404).json({ error: 'Not found' });
+  res.json({ calls: await db.listCalls(row.id) });
+});
+app.post('/api/team/enquiries/:id/calls', requireSub, requireXhr, async (req, res) => {
+  const row = await db.getEnquiry(parseInt(req.params.id, 10));
+  if (!teamRow(row, req.user)) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  if (!CALL_OUTCOMES.includes(b.outcome)) return res.status(400).json({ error: 'Choose the call result.' });
+  if (b.status && !STATUSES.includes(b.status)) return res.status(400).json({ error: 'Invalid status' });
+  const next = validDate(b.next_action_date);
+  await db.logCall({ enquiry_id: row.id, user_id: req.user.id, user_name: req.user.name, channel: b.channel === 'whatsapp' ? 'whatsapp' : 'call',
+    outcome: b.outcome, feedback: String(b.feedback || '').slice(0, 600), status_after: b.status || row.status, next_action_date: next });
+  const upd = { next_action_date: next };
+  if (b.status && b.status !== row.status) upd.status = b.status;
+  const out = await db.updateEnquiry(row.id, upd);
+  audit(req, 'call_logged', `${row.ref_no}: ${b.outcome}${b.status ? ' → ' + b.status : ''}`, 'info');
+  res.json({ ok: true, row: masked(out) });
+});
+async function followCounts(me) {
+  const scope = me && me.id, base = !me ? {} : me.kind === 'caller' ? { scopeCaller: me.id } : { scopeUser: me.id };
+  const [today, overdue, untouched, all] = await Promise.all(['today', 'overdue', 'untouched', undefined].map((follow) => db.listEnquiries({ ...base, follow })));
+  return { today: today.length, overdue: overdue.length, untouched: untouched.length, all: all.length, assigned: scope ? all.filter((r) => r.caller_id === scope).length : undefined };
+}
+app.get('/api/team/summary', requireSub, async (req, res) => res.json(await followCounts(req.user)));
+
 app.post('/api/team/enquiries', requireSub, requireXhr, async (req, res) => {
+  if (req.user.kind === 'caller') return res.status(403).json({ error: 'Calling-team accounts cannot add students.' });
   try {
     const r = await pushStudent(req.body, req.user, req.body.sendSms !== false);
     if (r.errors) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: r.errors });
@@ -662,8 +722,12 @@ app.get('/api/admin/users', requireAdmin, async (_req, res) => {
   const wk = Date.now() - 7 * 864e5;
   res.json({ users: users.map((u) => {
     const pushed = rows.filter((r) => r.created_by_id === u.id), assigned = rows.filter((r) => r.counsellor_id === u.id);
+    const calling = rows.filter((r) => r.caller_id === u.id), today = istToday();
     return { ...u, pushed: pushed.length, pushedWeek: pushed.filter((r) => new Date(r.created_at) > wk).length, assigned: assigned.length,
-      admitted: assigned.filter((r) => r.status === 'Admitted').length, pending: assigned.filter((r) => r.status === 'New').length };
+      admitted: (u.kind === 'caller' ? calling : assigned).filter((r) => r.status === 'Admitted').length, pending: assigned.filter((r) => r.status === 'New').length,
+      calling: calling.length, called: calling.filter((r) => r.call_count > 0).length, untouched: calling.filter((r) => !r.call_count && r.status === 'New').length,
+      overdue: calling.filter((r) => r.next_action_date && r.next_action_date < today && !['Admitted', 'Not Interested'].includes(r.status)).length,
+      interested: calling.filter((r) => ['Interested', 'Counselling Done', 'Applied', 'Admitted'].includes(r.status)).length };
   }) });
 });
 app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
@@ -671,11 +735,12 @@ app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
   const password = String(req.body.password || '') || genPassword();
   if (name.length < 2) return res.status(400).json({ error: 'Please enter the full name.' });
   if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === ADMIN_USER.toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
-  if (!/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: "Enter the counsellor's 10-digit WhatsApp mobile number (students reply to it)." });
+  if (!/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: "Enter a 10-digit WhatsApp mobile number for this account." });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (await db.getUserAuth(username)) return res.status(409).json({ error: 'That username is already taken.' });
-  const user = await db.createUser({ name, username, mobile, pass_hash: await bcrypt.hash(password, 12) });
-  audit(req, 'sub_admin_created', `${name} (@${username})`, 'info');
+  const kind = req.body.kind === 'caller' ? 'caller' : 'counsellor';
+  const user = await db.createUser({ name, username, mobile, kind, pass_hash: await bcrypt.hash(password, 12) });
+  audit(req, 'sub_admin_created', `${name} (@${username}) · ${kind === 'caller' ? 'calling team' : 'counsellor (data entry)'}`, 'info');
   res.json({ ok: true, user, password });
 });
 app.patch('/api/admin/users/:id', requireAdmin, requireXhr, async (req, res) => {
@@ -691,11 +756,11 @@ app.patch('/api/admin/users/:id', requireAdmin, requireXhr, async (req, res) => 
 });
 
 // ---------- admin API ----------
-const pickFilters = (q) => ({ pushedBy: q.pushedBy, counsellor: q.counsellor, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, region: q.region, verified: q.verified, from: q.from, to: q.to, sort: q.sort, dir: q.dir });
+const pickFilters = (q) => ({ caller: q.caller, follow: q.follow, pushedBy: q.pushedBy, counsellor: q.counsellor, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, region: q.region, verified: q.verified, from: q.from, to: q.to, sort: q.sort, dir: q.dir });
 
 app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
   const rows = await db.listEnquiries(pickFilters(req.query));
-  const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active }));
+  const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active, kind: u.kind }));
   res.json({ rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team, unseenAlerts: await db.countUnseenAlerts() });
 });
 
@@ -716,6 +781,55 @@ app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res)
   // newly assigned counsellor → tell the student whom to WhatsApp / call
   if (upd.counsellor_id && before && before.counsellor_id !== upd.counsellor_id) sendConfirmation(row).catch((e) => console.error('counsellor intro', e.message));
   res.json({ row });
+});
+
+const parseIds = (v) => [...new Set((Array.isArray(v) ? v : []).map((x) => parseInt(x, 10)).filter((x) => x > 0))].slice(0, 5000);
+// Assign selected students to one counsellor (or unassign with counsellor_id = null)
+app.post('/api/admin/assign', requireAdmin, requireXhr, async (req, res) => {
+  const ids = parseIds(req.body.ids);
+  if (!ids.length) return res.status(400).json({ error: 'Select at least one student.' });
+  let user = null;
+  if (req.body.counsellor_id) { user = await db.getUser(parseInt(req.body.counsellor_id, 10)); if (!user || !Number(user.active)) return res.status(400).json({ error: 'Choose an active caller.' }); }
+  const n = await db.assignMany(ids, user);
+  audit(req, 'calls_assigned', `${n} students → ${user ? user.name : 'no caller'}`, 'info');
+  res.json({ ok: true, assigned: n, to: user ? user.name : null });
+});
+// Share every student matching the current filters fairly among the chosen counsellors (load-balanced)
+app.post('/api/admin/distribute', requireAdmin, requireXhr, async (req, res) => {
+  const cids = parseIds(req.body.counsellors);
+  const users = (await Promise.all(cids.map((id) => db.getUser(id)))).filter((u) => u && Number(u.active));
+  if (!users.length) return res.status(400).json({ error: 'Choose at least one active caller.' });
+  let rows = await db.listEnquiries(pickFilters(req.body.filters || {}));
+  if (req.body.onlyUnassigned !== false) rows = rows.filter((r) => !r.caller_id);
+  if (!rows.length) return res.status(400).json({ error: 'No students to share with these filters.' });
+  // start from each counsellor's current open load so the result is balanced
+  const all = await db.listEnquiries({});
+  const load = new Map(users.map((u) => [u.id, all.filter((r) => r.caller_id === u.id && !['Admitted', 'Not Interested'].includes(r.status)).length]));
+  const plan = new Map(users.map((u) => [u.id, []]));
+  for (const r of rows) { const u = users.reduce((a, b) => (load.get(b.id) < load.get(a.id) ? b : a)); plan.get(u.id).push(r.id); load.set(u.id, load.get(u.id) + 1); }
+  const result = [];
+  for (const u of users) { const ids = plan.get(u.id); if (ids.length) await db.assignMany(ids, u); result.push({ name: u.name, count: ids.length }); }
+  audit(req, 'calls_distributed', `${rows.length} students shared: ${result.map((x) => `${x.name} ${x.count}`).join(', ')}`, 'info');
+  res.json({ ok: true, total: rows.length, result });
+});
+// Region rules: every new enquiry is given automatically (round-robin) to the CALLERS set for its region
+app.get('/api/admin/region-rules', requireAdmin, async (_req, res) => res.json({ rules: await db.getSetting('region_rules', {}), enabled: await db.getSetting('auto_assign', false), regions: REGIONS, assignedCalling: await db.getSetting('assigned_calling', true) }));
+app.put('/api/admin/region-rules', requireAdmin, requireXhr, async (req, res) => {
+  const rules = {};
+  for (const [region, ids] of Object.entries(req.body.rules || {})) { const v = parseIds(ids); if (v.length && REGIONS.includes(region)) rules[region] = v; }
+  if (req.body.rules !== undefined) await db.setSetting('region_rules', rules);
+  if (req.body.enabled !== undefined) await db.setSetting('auto_assign', !!req.body.enabled);
+  if (req.body.assignedCalling !== undefined) await db.setSetting('assigned_calling', !!req.body.assignedCalling);
+  audit(req, 'setting_changed', `auto-assign by region: ${(await db.getSetting('auto_assign', false)) ? 'ON' : 'OFF'} (${Object.keys(rules).length} regions)`, 'medium');
+  res.json({ ok: true, rules: await db.getSetting('region_rules', {}), enabled: await db.getSetting('auto_assign', false), assignedCalling: await db.getSetting('assigned_calling', true) });
+});
+app.get('/api/admin/enquiries/:id/calls', requireAdmin, async (req, res) => res.json({ calls: await db.listCalls(parseInt(req.params.id, 10)) }));
+app.get('/api/admin/followups', requireAdmin, async (_req, res) => {
+  const since = new Date(Date.now() - 7 * 864e5).toISOString();
+  res.json({ ...(await followCounts(null)), stats: await db.callStats(since) });
+});
+app.post('/api/admin/digest', requireAdmin, requireXhr, async (_req, res) => {
+  try { const r = await sendDigest(true); res.json(r); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/admin/enquiries/:id/sms', requireAdmin, requireXhr, async (req, res) => {
@@ -770,17 +884,55 @@ function countByDate(rows) {
   return Object.entries(m).sort((a, b) => b[0].localeCompare(a[0]));
 }
 
+// Columns the admin can tick when downloading (key → label, Excel width, PDF weight, value)
+const fmtDay = (d) => (d ? new Date(d + 'T00:00:00+05:30').toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '');
+const EXPORT_FIELDS = [
+  ['ref', 'Reference No.', 17, 1.0, (r) => r.ref_no],
+  ['name', 'Student Name', 26, 1.5, (r) => r.student_name],
+  ['mobile', 'Mobile', 14, 1.0, (r) => r.mobile],
+  ['verified', 'Mobile Verified', 10, 0.6, (r) => (r.mobile_verified ? 'Yes' : 'No')],
+  ['email', 'Email', 28, 1.6, (r) => r.email || ''],
+  ['city', 'City', 16, 0.9, (r) => r.city || ''],
+  ['region', 'Region', 24, 1.1, (r) => r.region || ''],
+  ['level', 'Level (UG/PG)', 8, 0.5, (r) => r.level],
+  ['programme', 'Programme', 14, 0.9, (r) => r.programme],
+  ['branch', 'Branch', 30, 1.4, (r) => r.branch || ''],
+  ['status', 'Status', 17, 0.9, (r) => r.status],
+  ['source', 'Primary Source', 20, 1.0, (r) => pushedLabel(r)],
+  ['counsellor', 'Counsellor (data)', 20, 1.1, (r) => r.counsellor_name || 'Unassigned'],
+  ['caller', 'Assigned Caller', 20, 1.1, (r) => r.caller_name || 'Not assigned'],
+  ['calls', 'No. of Calls', 8, 0.5, (r) => r.call_count || 0],
+  ['lastcall', 'Last Call', 20, 1.0, (r) => (r.last_call_at ? fmtIST(r.last_call_at) : '')],
+  ['outcome', 'Last Call Result', 16, 0.9, (r) => r.last_call_outcome || ''],
+  ['feedback', 'Latest Feedback', 34, 1.8, (r) => r._feedback || ''],
+  ['next', 'Next Follow-up', 14, 0.8, (r) => fmtDay(r.next_action_date)],
+  ['notes', 'Notes', 28, 1.4, (r) => r.notes || ''],
+  ['created', 'Created On (IST)', 21, 1.0, (r) => fmtIST(r.created_at)],
+  ['updated', 'Updated On (IST)', 21, 1.0, (r) => fmtIST(r.updated_at)],
+];
+const DEFAULT_FIELDS = ['ref', 'name', 'mobile', 'verified', 'email', 'city', 'region', 'level', 'programme', 'branch', 'status', 'source', 'counsellor', 'caller', 'notes', 'created'];
+const pickFields = (q) => {
+  const want = String(q.fields || '').split(',').filter(Boolean);
+  const list = EXPORT_FIELDS.filter((f) => (want.length ? want : DEFAULT_FIELDS).includes(f[0]));
+  return list.length ? list : EXPORT_FIELDS.filter((f) => DEFAULT_FIELDS.includes(f[0]));
+};
+async function withFeedback(rows, fields) {
+  if (fields.some((f) => f[0] === 'feedback')) { const m = await db.latestFeedback(rows.map((r) => r.id)); rows.forEach((r) => { r._feedback = m[r.id] || ''; }); }
+  return rows;
+}
+app.get('/api/admin/export-fields', requireAdmin, (_req, res) => res.json({ fields: EXPORT_FIELDS.map(([key, label]) => ({ key, label })), defaults: DEFAULT_FIELDS }));
 const stampLine = (req) => `CONFIDENTIAL · Downloaded by main admin · ${fmtIST(new Date().toISOString())} IST · IP ${req.ip} · Do not share`;
 app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   const f = await exportFilters(req.query);
-  const rows = await db.listEnquiries(f);
-  audit(req, 'export_excel', `${rows.length} records downloaded from IP ${req.ip}`, 'high');
+  const fields = pickFields(req.query);
+  const rows = await withFeedback(await db.listEnquiries(f), fields);
+  audit(req, 'export_excel', `${rows.length} records · ${fields.length} columns downloaded from IP ${req.ip}`, 'high');
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ADYPU Admission Desk';
   wb.subject = 'CONFIDENTIAL student data - authorised use only';
   wb.keywords = `downloaded ${new Date().toISOString()} ip ${req.ip}`;
   const ws = wb.addWorksheet('Enquiries', { views: [{ state: 'frozen', ySplit: 4 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
-  const cols = [['Sr.', 6], ['Reference No.', 17], ['Student Name', 26], ['Mobile', 14], ['Verified', 9], ['Email', 28], ['City', 16], ['Region', 24], ['Level', 7], ['Programme', 14], ['Branch', 30], ['Status', 17], ['Pushed By', 20], ['Counsellor', 20], ['Notes', 28], ['Submitted On (IST)', 21]];
+  const cols = [['Sr.', 6], ...fields.map((x) => [x[1], x[2]])];
   ws.columns = cols.map(([, w]) => ({ width: w }));
   ws.mergeCells(1, 1, 1, cols.length);
   ws.getCell('A1').value = `Ajeenkya DY Patil University, Pune — Admission Enquiries ${ACADEMIC_YEAR}`;
@@ -802,8 +954,8 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   });
   head.height = 22;
   rows.forEach((r, i) => {
-    const row = ws.addRow([i + 1, r.ref_no, r.student_name, r.mobile, r.mobile_verified ? 'Yes' : 'No', r.email || '', r.city || '', r.region || '', r.level, r.programme, r.branch || '—', r.status, pushedLabel(r), r.counsellor_name || 'Unassigned', r.notes || '', fmtIST(r.created_at)]);
-    row.getCell(4).numFmt = '@';
+    const row = ws.addRow([i + 1, ...fields.map((x) => x[4](r))]);
+    const mi = fields.findIndex((x) => x[0] === 'mobile'); if (mi >= 0) row.getCell(mi + 2).numFmt = '@';
     row.eachCell((c) => {
       c.alignment = { vertical: 'top', wrapText: true };
       c.border = { bottom: { style: 'hair', color: { argb: 'FFCBD5E1' } } };
@@ -830,6 +982,8 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   section('By status', countBy(rows, 'status'));
   section('By pushed by', countBy(rows.map((r) => ({ k: pushedLabel(r) })), 'k'));
   section('By counsellor', countBy(rows.map((r) => ({ k: r.counsellor_name || 'Unassigned' })), 'k'));
+  section('By assigned caller', countBy(rows.map((r) => ({ k: r.caller_name || 'Not assigned' })), 'k'));
+  section('By last call result', countBy(rows.map((r) => ({ k: r.last_call_outcome || 'Not called yet' })), 'k'));
   section('By region', countBy(rows.map((r) => ({ ...r, region: r.region || 'Not given' })), 'region'));
   section('By date (IST)', countByDate(rows));
   section('Mobile verified', countBy(rows.map((r) => ({ v: r.mobile_verified ? 'Verified' : 'Not verified' })), 'v'));
@@ -843,8 +997,9 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
 
 app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   const f = await exportFilters(req.query);
-  const rows = await db.listEnquiries(f);
-  audit(req, 'export_pdf', `${rows.length} records downloaded from IP ${req.ip}`, 'high');
+  const fields = pickFields(req.query);
+  const rows = await withFeedback(await db.listEnquiries(f), fields);
+  audit(req, 'export_pdf', `${rows.length} records · ${fields.length} columns downloaded from IP ${req.ip}`, 'high');
   const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: 36, bufferPages: true, info: { Title: 'ADYPU Admission Enquiries', Author: 'ADYPU Admission Desk' } });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="ADYPU_Admission_Enquiries_${stamp()}.pdf"`);
@@ -876,26 +1031,30 @@ app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   });
   doc.y = ty + 54;
 
-  const cols = [['#', 22], ['Ref. No.', 74], ['Student Name', 112], ['Mobile', 72], ['City / Region', 118], ['Programme', 112], ['Status', 70], ['Pushed by / Counsellor', 110], ['Submitted (IST)', 80]];
+  const totalW = fields.reduce((a, x) => a + x[3], 0), avail = R - L - 22;
+  const cols = [['#', 22], ...fields.map((x) => [x[1], (avail * x[3]) / totalW])];
+  const fs = fields.length > 12 ? 6.5 : fields.length > 9 ? 7.5 : 8.5;
   const drawHead = () => {
     const y = doc.y;
     doc.rect(L, y, R - L, 20).fill(NAVY);
     let x = L;
-    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(8.5);
-    cols.forEach(([h, w]) => { doc.text(h, x + 4, y + 6, { width: w - 8 }); x += w; });
-    doc.y = y + 20;
+    doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(fs);
+    const hh = Math.max(20, ...cols.map(([h, w]) => doc.heightOfString(h, { width: w - 6 }) + 10));
+    doc.rect(L, y, R - L, hh).fill(NAVY); doc.fillColor('#FFFFFF');
+    cols.forEach(([h, w]) => { doc.text(h, x + 3, y + 5, { width: w - 6 }); x += w; });
+    doc.y = y + hh;
   };
   drawHead();
-  doc.font('Helvetica').fontSize(8.5);
+  doc.font('Helvetica').fontSize(fs);
   rows.forEach((r, i) => {
-    const vals = [i + 1, r.ref_no, r.student_name, `${r.mobile}${r.mobile_verified ? '  (verified)' : ''}`, r.city ? `${r.city}\n${r.region || ''}` : '—', `${r.level} · ${r.programme}${r.branch ? '\n' + r.branch : ''}`, r.status, `${pushedLabel(r)}\n→ ${r.counsellor_name || 'Unassigned'}`, fmtIST(r.created_at)];
-    const h = Math.max(18, ...vals.map((v, k) => doc.heightOfString(String(v), { width: cols[k][1] - 8 }) + 8));
-    if (doc.y + h > doc.page.height - 50) { doc.addPage(); header(); doc.y = 82; drawHead(); doc.font('Helvetica').fontSize(8.5); }
+    const vals = [i + 1, ...fields.map((x) => x[4](r))];
+    const h = Math.max(18, ...vals.map((v, k) => doc.heightOfString(String(v), { width: cols[k][1] - 6 }) + 8));
+    if (doc.y + h > doc.page.height - 50) { doc.addPage(); header(); doc.y = 82; drawHead(); doc.font('Helvetica').fontSize(fs); }
     const y = doc.y;
     if (i % 2) doc.rect(L, y, R - L, h).fill('#F5F7FB');
     let x = L;
     doc.fillColor('#0F172A');
-    vals.forEach((v, k) => { doc.text(String(v), x + 4, y + 4, { width: cols[k][1] - 8 }); x += cols[k][1]; });
+    vals.forEach((v, k) => { doc.text(String(v), x + 3, y + 4, { width: cols[k][1] - 6 }); x += cols[k][1]; });
     doc.moveTo(L, y + h).lineTo(R, y + h).lineWidth(0.3).strokeColor('#CBD5E1').stroke();
     doc.y = y + h;
   });
@@ -944,6 +1103,39 @@ app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
   }
   doc.end();
 });
+
+// ---------- daily 9 AM summary email: untouched enquiries + follow-ups ----------
+async function sendDigest(force) {
+  if (!mailer) return { ok: false, error: 'Email is not set up' };
+  const today = istToday();
+  if (!force && (await db.getSetting('digest_last', '')) === today) return { ok: true, skipped: true };
+  const all = await db.listEnquiries({});
+  const dayAgo = Date.now() - 24 * 3600e3, open = (r) => !['Admitted', 'Not Interested'].includes(r.status);
+  const untouched = all.filter((r) => r.status === 'New' && !r.call_count && new Date(r.created_at).getTime() < dayAgo);
+  const noCaller = untouched.filter((r) => !r.caller_id);
+  const overdue = all.filter((r) => r.next_action_date && r.next_action_date < today && open(r));
+  const dueToday = all.filter((r) => r.next_action_date === today && open(r));
+  const fresh = all.filter((r) => new Date(r.created_at).getTime() >= dayAgo);
+  const per = {};
+  [...untouched.map((r) => [r, 'u']), ...overdue.map((r) => [r, 'o']), ...dueToday.map((r) => [r, 't'])].forEach(([r, k]) => {
+    const n = r.caller_name || 'Not assigned'; per[n] = per[n] || { u: 0, o: 0, t: 0 }; per[n][k] += 1; });
+  const rowsHtml = Object.entries(per).sort((a, b) => (b[1].u + b[1].o) - (a[1].u + a[1].o)).map(([n, c]) =>
+    `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">${n.replace(/[<&>]/g, '')}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;color:#b91c1c;font-weight:700">${c.u}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;color:#c2410c">${c.o}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center">${c.t}</td></tr>`).join('');
+  const tile = (n, l, c) => `<td style="padding:12px;background:#f8fafc;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:${c}">${n}</div><div style="font-size:12px;color:#64748b">${l}</div></td>`;
+  const text = `ADYPU admissions - daily summary ${today}: ${untouched.length} untouched for 24h+ (${noCaller.length} with no caller), ${overdue.length} overdue follow-ups, ${dueToday.length} follow-ups due today, ${fresh.length} new enquiries in the last 24h.`;
+  await mailer.sendMail({ to: ALERT_EMAIL_TO, subject: `ADYPU admissions · ${untouched.length} untouched · ${overdue.length} overdue · ${dueToday.length} due today`, text,
+    html: `<div style="font-family:Arial,sans-serif;max-width:620px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>ADYPU admissions - daily summary</b><div style="font-size:12px;color:#FFD8A8">${fmtDay(today)}</div></div>
+      <div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px"><table style="width:100%;border-spacing:8px"><tr>${tile(untouched.length, 'Untouched 24h+', '#b91c1c')}${tile(overdue.length, 'Overdue follow-ups', '#c2410c')}${tile(dueToday.length, 'Due today', '#0B1F4B')}${tile(fresh.length, 'New in 24h', '#15803d')}</tr></table>
+      ${noCaller.length ? `<p style="background:#fef2f2;color:#991b1b;padding:10px;border-radius:8px;font-size:13px">⚠ ${noCaller.length} untouched enquiries have <b>no caller assigned</b>. Open Enquiries → filter "Untouched" → Assign for calling.</p>` : ''}
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:8px"><tr style="background:#F08A24;color:#fff"><th style="padding:6px 10px;text-align:left">Caller</th><th>Untouched</th><th>Overdue</th><th>Due today</th></tr>${rowsHtml || '<tr><td colspan="4" style="padding:10px">Nothing pending - well done!</td></tr>'}</table>
+      <p style="color:#64748b;font-size:12px;margin-top:14px">Sent automatically every morning at 9 AM IST. Student names and numbers are never included in this email.</p></div></div>` });
+  await db.setSetting('digest_last', today);
+  return { ok: true, untouched: untouched.length, overdue: overdue.length, dueToday: dueToday.length };
+}
+setInterval(() => {
+  const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
+  if (h >= 9 && h < 21) sendDigest(false).catch((e) => console.error('digest', e.message));
+}, 10 * 60 * 1000);
 
 app.get('/healthz', (_req, res) => res.send('ok'));
 app.use((_req, res) => res.redirect('/'));

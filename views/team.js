@@ -6,7 +6,7 @@
   const fmt = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   const istDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const STATUS_CLS = { 'New': 's-new', 'Contacted': 's-contacted', 'Interested': 's-interested', 'Counselling Done': 's-counsel', 'Applied': 's-applied', 'Admitted': 's-admitted', 'Not Interested': 's-no' };
-  let ALLOW_REVEAL = false, ME = null, STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [];
+  let ALLOW_REVEAL = false, ME = null, STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [], KIND = 'counsellor', OUTCOMES = [], cf = 'today', crows = [], LOG = null;
   function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 2600); }
 
   // ---------- add form: Level → Programme → Branch ----------
@@ -72,8 +72,81 @@
     } finally { btn.textContent = 'Upload students'; btn.disabled = !file; }
   });
 
+  // ---------- calling team ----------
+  const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const addDays = (n) => new Date(Date.now() + 5.5 * 3600e3 + n * 864e5).toISOString().slice(0, 10);
+  const dShort = (d) => new Date(d + 'T00:00:00+05:30').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  async function loadCalls() {
+    const p = new URLSearchParams(); if (cf) p.set('follow', cf); if (cf === 'today' || cf === 'upcoming' || cf === 'overdue') p.set('sort', 'next'), p.set('dir', 'asc');
+    if ($('#cq').value.trim()) p.set('q', $('#cq').value.trim());
+    const [list, sum] = await Promise.all([api('/api/team/enquiries?' + p), api('/api/team/summary')]);
+    crows = list.rows || [];
+    $('#cToday').textContent = sum.today; $('#cOver').textContent = sum.overdue; $('#cUn').textContent = sum.untouched; $('#cAll').textContent = sum.all;
+    const k = [['Assigned to me', sum.all, '📋', ''], ['Due today', sum.today, '📅', sum.today ? 'warn' : ''], ['Overdue', sum.overdue, '⏰', sum.overdue ? 'bad' : ''], ['Not called yet', sum.untouched, '🔴', sum.untouched ? 'warn' : ''], ['Called', sum.all - sum.untouched, '✅', 'good']];
+    $('#kpis').innerHTML = k.map(([t, v, i, c]) => `<div class="kpi tk ${c}"><span class="tk-i">${i}</span><div><div class="kt">${t}</div><div class="kv"><b>${v}</b></div></div></div>`).join('');
+    const empty = { today: '🎉 No follow-ups due today.', overdue: '👍 Nothing overdue.', untouched: '✅ You have called every student assigned to you.', upcoming: 'No upcoming follow-ups planned.', '': 'No students assigned to you yet. The admin assigns students for calling.' };
+    $('#clist').innerHTML = crows.length ? crows.map((r) => {
+      const t = istToday(), due = r.next_action_date;
+      const dueTag = !due ? '' : due < t ? `<span class="fu over">⏰ was due ${dShort(due)}</span>` : due === t ? '<span class="fu now">📅 due today</span>' : `<span class="fu">🗓 ${dShort(due)}</span>`;
+      return `<article class="cc" data-id="${r.id}">
+        <div class="cc-main"><b>${esc(r.student_name)}</b> <code>${esc(r.ref_no)}</code>
+          <div class="cc-sub"><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level)}</span> ${esc(r.programme)}${r.branch ? ' · ' + esc(r.branch) : ''} · 📍 ${esc(r.city || '—')}</div>
+          <div class="cc-tags"><span class="mask">🔒 +91 ${esc(r.mobile)}</span> <span class="stb ${STATUS_CLS[r.status] || ''}">${esc(r.status)}</span>
+            ${r.call_count ? `<span class="fu">📞 ${r.call_count} call${r.call_count > 1 ? 's' : ''} · last: ${esc(r.last_call_outcome || '')}</span>` : '<span class="fu new">🔴 not called yet</span>'} ${dueTag}</div></div>
+        <div class="cc-act"><button class="btn primary dial" data-via="call" type="button">📞 Call</button><button class="btn wa dial" data-via="whatsapp" type="button">💬 WhatsApp</button><button class="btn ghost log" type="button">📝 Log call</button></div>
+      </article>`; }).join('') : `<p class="empty-c">${empty[cf]}</p>`;
+  }
+  $('#callTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; cf = b.dataset.f; $('#callTabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); loadCalls(); });
+  let ct; $('#cq').addEventListener('input', () => { clearTimeout(ct); ct = setTimeout(loadCalls, 300); });
+  $('#clist').addEventListener('click', async (e) => {
+    const card = e.target.closest('.cc'); if (!card) return;
+    const r = crows.find((x) => x.id == card.dataset.id);
+    const d = e.target.closest('.dial');
+    if (d) {
+      const via = d.dataset.via;
+      const j = await api(`/api/team/enquiries/${r.id}/dial`, { method: 'POST', body: JSON.stringify({ via }) });
+      if (!j.mobile) return toast(j.error || 'Not allowed');
+      if (via === 'whatsapp') {
+        const msg = `Hello ${j.first}, I am ${ME.name} from the Admission Office, Ajeenkya DY Patil University, Pune. Thank you for your enquiry for ${j.course} (Ref: ${j.ref}). Please reply here for any query.`;
+        window.open(`https://wa.me/91${j.mobile}?text=${encodeURIComponent(msg)}`, '_blank', 'noopener');
+      } else location.href = 'tel:+91' + j.mobile;
+      setTimeout(() => openLog(r, via), 1200); // after the call, ask for the result
+      return;
+    }
+    if (e.target.closest('.log')) openLog(r, 'call');
+  });
+  async function openLog(r, via) {
+    LOG = { r, via, outcome: '' };
+    $('#logTitle').textContent = `📝 ${via === 'whatsapp' ? 'WhatsApp' : 'Call'} with ${r.student_name} · ${r.ref_no}`;
+    $('#outcomes').innerHTML = OUTCOMES.map((o) => `<button type="button" data-o="${esc(o)}">${{ Connected: '✅', 'Not picked': '📵', Busy: '⏳', 'Switched off': '📴', 'Not reachable': '🚫', 'Wrong number': '❌', 'Call back later': '🔁' }[o] || ''} ${esc(o)}</button>`).join('');
+    const f = $('#logForm'); f.reset();
+    $('#logStatus').innerHTML = STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('');
+    f.next.value = r.next_action_date && r.next_action_date >= istToday() ? r.next_action_date : addDays(2);
+    const h = await api(`/api/team/enquiries/${r.id}/calls`);
+    $('#logHist').innerHTML = (h.calls || []).length ? '<b class="small">Earlier calls</b>' + h.calls.slice(0, 4).map((c) => `<div class="hm"><span>${esc(c.outcome)} · ${fmt(c.at)}</span>${c.feedback ? `<p>${esc(c.feedback)}</p>` : ''}</div>`).join('') : '';
+    $('#logModal').hidden = false;
+  }
+  $('#outcomes').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return; LOG.outcome = b.dataset.o;
+    $('#outcomes').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+    const f = $('#logForm');
+    if (LOG.outcome === 'Connected' && f.status.value === 'New') f.status.value = 'Contacted';
+    if (['Not picked', 'Busy', 'Switched off', 'Not reachable'].includes(LOG.outcome)) f.next.value = addDays(1);
+    if (LOG.outcome === 'Call back later') f.next.value = addDays(1);
+  });
+  $('#quickDates').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; $('#logForm').next.value = b.dataset.d ? addDays(+b.dataset.d) : ''; });
+  document.addEventListener('click', (e) => { if (e.target.matches('[data-close]') || e.target.classList.contains('modal')) e.target.closest('.modal').hidden = true; });
+  $('#logSave').addEventListener('click', async () => {
+    if (!LOG.outcome) return toast('Choose how the call went');
+    const f = $('#logForm');
+    const j = await api(`/api/team/enquiries/${LOG.r.id}/calls`, { method: 'POST', body: JSON.stringify({ outcome: LOG.outcome, feedback: f.feedback.value, status: f.status.value, next_action_date: f.next.value, channel: LOG.via }) });
+    if (!j.ok) return toast(j.error || 'Could not save');
+    $('#logModal').hidden = true; toast(`✅ Saved · ${LOG.outcome}${f.next.value ? ' · next follow-up ' + dShort(f.next.value) : ''}`); loadCalls();
+  });
+
   // ---------- my students ----------
   async function load() {
+    if (KIND === 'caller') return loadCalls();
     const p = new URLSearchParams();
     if ($('#q').value.trim()) p.set('q', $('#q').value.trim());
     if ($('#fStatus').value) p.set('status', $('#fStatus').value);
@@ -133,7 +206,17 @@
 
   (async () => {
     const j = await api('/api/team/me');
-    ME = j.user; STATUSES = j.statuses; LEVELS = j.levels;
+    ME = j.user; STATUSES = j.statuses; LEVELS = j.levels; KIND = j.kind || 'counsellor'; OUTCOMES = j.outcomes || [];
+    if (KIND === 'caller') {
+      ['qrSec', 'pushSec', 'studentsSec'].forEach((id) => { $('#' + id).hidden = true; });
+      $('#callSec').hidden = false;
+      document.querySelector('.tb-brand b').textContent = 'Calling Workspace';
+      document.querySelector('.hello .muted').textContent = 'Students the admin assigned to you for calling. Tap Call, then log how it went and when to follow up.';
+      $('#meChip').textContent = `📞 ${ME.name} · @${ME.username}`;
+      const hh = +new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', hour: 'numeric', hour12: false });
+      $('#hello').textContent = `${hh < 12 ? 'Good morning' : hh < 17 ? 'Good afternoon' : 'Good evening'}, ${ME.name.split(' ')[0]} 👋`;
+      return loadCalls();
+    }
     if (!j.studentMsgs) { // admin has switched student messages off
       [F.sendSms, $('#bulkSms')].forEach((c) => { if (c) { c.checked = false; const l = c.closest('label'); if (l) l.hidden = true; } });
     }

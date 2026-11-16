@@ -14,7 +14,7 @@
     UG: { base: '#0B1F4B', progs: ['#1e3a8a', '#3b5bdb', '#6d83f2', '#a5b4fc'], br: '#c7d2fe' },
     PG: { base: '#c2410c', progs: ['#ea580c', '#f59e0b', '#fbbf24'], br: '#fed7aa' },
   };
-  const FILTERS = ['pushedBy', 'counsellor', 'q', 'programme', 'branch', 'region', 'status', 'verified', 'from', 'to'];
+  const FILTERS = ['pushedBy', 'counsellor', 'caller', 'follow', 'q', 'programme', 'branch', 'region', 'status', 'verified', 'from', 'to'];
   let TEAM = [], STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [], allRows = [], inited = false, level = '', trendDays = 14;
   let sort = { key: 'date', dir: 'desc' };
 
@@ -43,8 +43,6 @@
 
   async function load() {
     const qs = params();
-    $('#xlsx').href = '/api/admin/export.xlsx?' + qs;
-    $('#pdf').href = '/api/admin/export.pdf?' + qs;
     const [j, everything] = await Promise.all([api('/api/admin/enquiries?' + qs), api('/api/admin/enquiries')]);
     rows = j.rows; allRows = everything.rows; STATUSES = j.statuses; LEVELS = j.levels || LEVELS; TEAM = j.team || []; fillTeamSelects();
     if (!inited) init(j);
@@ -73,9 +71,11 @@
     if (cur && !list.includes(cur)) $('#branch').value = '';
   }
   function fillTeamSelects() {
-    [['pushedBy', '<option value="">All sources</option><option value="web">🌐 Website form</option>'], ['counsellor', '<option value="">All counsellors</option><option value="none">⚠ Unassigned</option>']].forEach(([id, base]) => {
+    const COUNS = TEAM.filter((u) => u.kind !== 'caller'), CALLERS = TEAM.filter((u) => u.kind === 'caller');
+    [['pushedBy', '<option value="">All sources</option><option value="web">🌐 Website form</option>', COUNS], ['counsellor', '<option value="">All counsellors</option><option value="none">⚠ Unassigned</option>', COUNS],
+     ['caller', '<option value="">All callers</option><option value="none">📵 No caller</option>', CALLERS], ['selCaller', '<option value="">Choose caller…</option>', CALLERS.filter((u) => u.active)]].forEach(([id, base, list]) => {
       const el = $('#' + id), cur = el.value;
-      el.innerHTML = base + TEAM.map((u) => `<option value="${u.id}">${u.active ? '👤' : '⛔'} ${esc(u.name)}</option>`).join('');
+      el.innerHTML = base + list.map((u) => `<option value="${u.id}">${u.active ? (u.kind === 'caller' ? '📞' : '👤') : '⛔'} ${esc(u.name)}</option>`).join('');
       el.value = [...el.options].some((o) => o.value === cur) ? cur : '';
     });
   }
@@ -105,7 +105,7 @@
   }
 
   function renderChips() {
-    const labels = { pushedBy: 'Pushed by', counsellor: 'Counsellor', q: 'Search', programme: 'Programme', branch: 'Branch', region: 'Region', status: 'Status', verified: 'Verified', from: 'From', to: 'To' };
+    const labels = { caller: 'Caller', follow: 'Follow-up', pushedBy: 'Pushed by', counsellor: 'Counsellor', q: 'Search', programme: 'Programme', branch: 'Branch', region: 'Region', status: 'Status', verified: 'Verified', from: 'From', to: 'To' };
     const chips = [];
     if (level) chips.push(`<span class="fchip">Level: <b>${level}</b><button data-clear="level" aria-label="Remove filter">✕</button></span>`);
     FILTERS.filter((k) => $('#' + k).value).forEach((k) => {
@@ -349,10 +349,12 @@
     $('#sortSel').value = `${sort.key}:${sort.dir}`;
     if (![...$('#sortSel').options].some((o) => o.value === $('#sortSel').value)) $('#sortSel').value = '';
     $('#hint').textContent = `Showing ${rows.length} of ${allRows.length} enquiries. Excel / PDF exports include exactly these rows, in this order.`;
-    if (!rows.length) { $('#rows').innerHTML = '<tr><td colspan="13" class="empty">No enquiries found for these filters.</td></tr>'; return; }
+    renderAssign();
+    if (!rows.length) { $('#rows').innerHTML = '<tr><td colspan="15" class="empty">No enquiries found for these filters.</td></tr>'; return; }
     $('#rows').innerHTML = rows.map((r, i) => {
       const sb = SMS_BADGE[r.sms_status];
-      return `<tr data-id="${r.id}">
+      return `<tr data-id="${r.id}" class="${SEL.has(r.id) ? 'picked' : ''}">
+        <td><input type="checkbox" class="pick" ${SEL.has(r.id) ? 'checked' : ''} aria-label="Select"></td>
         <td class="muted">${i + 1}</td>
         <td><code>${esc(r.ref_no)}</code></td>
         <td><b>${esc(r.student_name)}</b></td>
@@ -360,7 +362,9 @@
         <td>${r.city ? `${esc(r.city)}<br><span class="rtag">${esc(r.region || 'Other')}</span>` : '<span class="muted">—</span>'}</td>
         <td><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level || 'UG')}</span> <b>${esc(r.programme || r.course)}</b>${r.branch ? `<br><span class="muted">${esc(r.branch)}</span>` : ''}</td>
         <td>${r.source === 'qr-ref' ? `<span class="src qr">📱 ${esc(r.created_by_name)} (QR)</span>` : r.created_by_id ? `<span class="src me">👤 ${esc(r.created_by_name)}</span>` : r.source === 'qr' ? '<span class="src web">📱 QR scan</span>' : '<span class="src web">🌐 Website</span>'}</td>
-        <td><select class="cs ${r.counsellor_id ? '' : 'none'}"><option value="">⚠ Unassigned</option>${TEAM.filter((u) => u.active || u.id === r.counsellor_id).map((u) => `<option value="${u.id}" ${u.id === r.counsellor_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></td>
+        <td><select class="cs ${r.counsellor_id ? '' : 'none'}"><option value="">⚠ Unassigned</option>${TEAM.filter((u) => u.kind !== 'caller' && (u.active || u.id === r.counsellor_id)).map((u) => `<option value="${u.id}" ${u.id === r.counsellor_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></td>
+        <td class="callcell"><select class="cl ${r.caller_id ? '' : 'none'}"><option value="">📵 No caller</option>${TEAM.filter((u) => u.kind === 'caller' && (u.active || u.id === r.caller_id)).map((u) => `<option value="${u.id}" ${u.id === r.caller_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+          ${callInfo(r)}</td>
         <td><select class="st ${STATUS_CLS[r.status] || ''}">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></td>
         <td><input class="note" value="${esc(r.notes)}" placeholder="Add note…" maxlength="500"></td>
         <td class="muted nowrap">${fmt(r.created_at)}</td>
@@ -397,7 +401,7 @@
 
   $('#lvlSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; level = b.dataset.level; syncLevel(); fillProgrammes(); fillBranches(); load(); });
   $('#programme').addEventListener('change', () => { fillBranches(); load(); });
-  ['branch', 'region', 'status', 'verified', 'pushedBy', 'counsellor'].forEach((id) => $('#' + id).addEventListener('change', load));
+  ['branch', 'region', 'status', 'verified', 'pushedBy', 'counsellor', 'caller', 'follow'].forEach((id) => $('#' + id).addEventListener('change', load));
   ['from', 'to'].forEach((id) => $('#' + id).addEventListener('change', () => { markPreset(''); load(); }));
   let qt; $('#q').addEventListener('input', () => { clearTimeout(qt); qt = setTimeout(load, 300); });
   const markPreset = (p) => $('#presets').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.p === p));
@@ -467,6 +471,108 @@
     await api(`/api/admin/enquiries/${r.id}`, { method: 'DELETE' });
     toast('Enquiry deleted'); load();
   });
+  // ---------- calling assignment ----------
+  const SEL = new Set();
+  const today = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const dShort = (d) => new Date(d + 'T00:00:00+05:30').toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+  function callInfo(r) {
+    const due = r.next_action_date, t = today();
+    const dueTag = !due ? '' : due < t ? `<span class="fu over">⏰ ${dShort(due)}</span>` : due === t ? '<span class="fu now">📅 today</span>' : `<span class="fu">🗓 ${dShort(due)}</span>`;
+    const calls = r.call_count ? `<button class="hist" type="button" title="Call history">📞 ${r.call_count} · ${esc(r.last_call_outcome || '')}</button>` : (r.caller_id ? '<span class="fu new">🔴 not called</span>' : '');
+    return `<div class="ci">${calls}${dueTag}</div>`;
+  }
+  function renderAssign() {
+    $('#selCount').textContent = SEL.size; $('#fltCount').textContent = rows.length;
+    const callers = TEAM.filter((u) => u.kind === 'caller' && u.active);
+    const keep = new Set([...document.querySelectorAll('#shareCallers input:checked')].map((x) => x.value));
+    $('#shareCallers').innerHTML = callers.length ? callers.map((u) => `<label class="chipc"><input type="checkbox" value="${u.id}" ${keep.has(String(u.id)) ? 'checked' : ''}> 📞 ${esc(u.name)}</label>`).join('')
+      : '<span class="small muted">No calling-team accounts yet — create one in the Team tab (choose "Calling team").</span>';
+    const all = $('#selAll'); if (all) all.checked = rows.length > 0 && rows.every((r) => SEL.has(r.id));
+  }
+  $('#rows').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('pick')) return;
+    const id = +e.target.closest('tr').dataset.id; e.target.checked ? SEL.add(id) : SEL.delete(id);
+    e.target.closest('tr').classList.toggle('picked', e.target.checked); renderAssign();
+  });
+  $('#selAll').addEventListener('change', (e) => { rows.forEach((r) => (e.target.checked ? SEL.add(r.id) : SEL.delete(r.id))); renderTable(); });
+  async function assignIds(ids, callerId) {
+    const j = await api('/api/admin/assign', { method: 'POST', body: JSON.stringify({ ids, counsellor_id: callerId || null }) });
+    if (j.error) return toast(j.error);
+    toast(callerId ? `✅ ${j.assigned} students assigned to ${j.to} for calling` : `${j.assigned} students now have no caller`); SEL.clear(); load();
+  }
+  $('#assignSel').addEventListener('click', () => { if (!SEL.size) return toast('Tick students in the table first'); if (!$('#selCaller').value) return toast('Choose a caller'); assignIds([...SEL], $('#selCaller').value); });
+  $('#unassignSel').addEventListener('click', () => { if (!SEL.size) return toast('Tick students in the table first'); assignIds([...SEL], null); });
+  $('#shareBtn').addEventListener('click', async () => {
+    const ids = [...document.querySelectorAll('#shareCallers input:checked')].map((x) => +x.value);
+    if (!ids.length) return toast('Tick at least one caller to share with');
+    const f = Object.fromEntries(new URLSearchParams(params()));
+    if (!confirm(`Share ${$('#onlyUn').checked ? 'the students without a caller among the' : 'all'} ${rows.length} filtered students between ${ids.length} caller(s)?`)) return;
+    const j = await api('/api/admin/distribute', { method: 'POST', body: JSON.stringify({ filters: f, counsellors: ids, onlyUnassigned: $('#onlyUn').checked }) });
+    if (j.error) return toast(j.error);
+    toast(`✅ ${j.total} students shared (balanced by each caller's current workload): ` + j.result.map((x) => `${x.name} +${x.count}`).join(' · ')); load();
+  });
+  $('#rows').addEventListener('change', async (e) => {
+    if (!e.target.classList.contains('cl')) return;
+    const id = +e.target.closest('tr').dataset.id; await assignIds([id], e.target.value);
+  });
+  // call history
+  $('#rows').addEventListener('click', async (e) => {
+    if (!e.target.closest('.hist')) return;
+    const r = rows.find((x) => x.id == e.target.closest('tr').dataset.id);
+    const j = await api(`/api/admin/enquiries/${r.id}/calls`);
+    $('#histTitle').textContent = `📞 Calls · ${r.student_name} (${r.ref_no})`;
+    $('#histBody').innerHTML = j.calls.length ? '<ol class="hist-list">' + j.calls.map((c) => `<li><div><b>${esc(c.outcome)}</b> <span class="muted small">by ${esc(c.user_name || '—')} · ${fmt(c.at)} · ${c.channel === 'whatsapp' ? '💬 WhatsApp' : '📞 Call'}</span></div>
+      ${c.feedback ? `<p>${esc(c.feedback)}</p>` : ''}<small class="muted">${c.status_after ? 'Status → ' + esc(c.status_after) : ''}${c.next_action_date ? ' · next follow-up ' + dShort(c.next_action_date) : ''}</small></li>`).join('') + '</ol>' : '<p class="muted">No calls logged yet.</p>';
+    $('#histModal').hidden = false;
+  });
+  document.addEventListener('click', (e) => { if (e.target.matches('[data-close]') || e.target.classList.contains('modal')) e.target.closest('.modal').hidden = true; });
+  // region rules
+  let RULES = { rules: {}, regions: [] };
+  async function loadRules() {
+    RULES = await api('/api/admin/region-rules');
+    $('#ruleState').textContent = RULES.enabled ? `ON · ${Object.keys(RULES.rules).length} regions` : 'OFF';
+    $('#ruleState').classList.toggle('on', !!RULES.enabled);
+  }
+  $('#openRules').addEventListener('click', async () => {
+    await loadRules();
+    const callers = TEAM.filter((u) => u.kind === 'caller' && u.active);
+    $('#ruleOn').checked = !!RULES.enabled; $('#callOn').checked = RULES.assignedCalling !== false;
+    $('#ruleGrid').innerHTML = callers.length ? RULES.regions.map((reg) => `<div class="rule"><b>${esc(reg)}</b><div>${callers.map((u) => `<label class="chipc"><input type="checkbox" data-reg="${esc(reg)}" value="${u.id}" ${(RULES.rules[reg] || []).includes(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div></div>`).join('')
+      : '<p class="muted">Create calling-team accounts first (Team tab → "Calling team").</p>';
+    $('#ruleModal').hidden = false;
+  });
+  $('#ruleSave').addEventListener('click', async () => {
+    const rules = {};
+    document.querySelectorAll('#ruleGrid input:checked').forEach((x) => { (rules[x.dataset.reg] = rules[x.dataset.reg] || []).push(+x.value); });
+    await api('/api/admin/region-rules', { method: 'PUT', body: JSON.stringify({ rules, enabled: $('#ruleOn').checked, assignedCalling: $('#callOn').checked }) });
+    $('#ruleModal').hidden = true; toast('✅ Region rules saved'); loadRules();
+  });
+  loadRules().catch(() => {});
+
+  // ---------- export: choose columns ----------
+  let FIELDS = [], DEF = [];
+  const store = { get: () => { try { return JSON.parse(localStorage.getItem('expFields') || 'null'); } catch { return null; } }, set: (v) => { try { localStorage.setItem('expFields', JSON.stringify(v)); } catch {} } };
+  async function openExport() {
+    if (!FIELDS.length) { const j = await api('/api/admin/export-fields'); FIELDS = j.fields; DEF = j.defaults; }
+    const chosen = new Set(store.get() || DEF);
+    $('#expFields').innerHTML = FIELDS.map((f) => `<label class="ef"><input type="checkbox" value="${f.key}" ${chosen.has(f.key) ? 'checked' : ''}> ${esc(f.label)}</label>`).join('');
+    $('#expRows').textContent = rows.length; $('#expSearch').value = ''; syncExp(); $('#expModal').hidden = false;
+  }
+  const picked = () => [...document.querySelectorAll('#expFields input:checked')].map((x) => x.value);
+  function syncExp() { const n = picked().length; $('#expAll').checked = n === FIELDS.length; $('#expNote').textContent = `${n} column${n === 1 ? '' : 's'} selected`; store.set(picked()); }
+  $('#expFields').addEventListener('change', syncExp);
+  $('#expAll').addEventListener('change', (e) => { document.querySelectorAll('#expFields input').forEach((x) => { x.checked = e.target.checked; }); syncExp(); });
+  $('#expReset').addEventListener('click', () => { document.querySelectorAll('#expFields input').forEach((x) => { x.checked = DEF.includes(x.value); }); syncExp(); });
+  $('#expSearch').addEventListener('input', (e) => { const q = e.target.value.toLowerCase(); document.querySelectorAll('#expFields .ef').forEach((l) => { l.hidden = q && !l.textContent.toLowerCase().includes(q); }); });
+  const download = (kind) => { const f = picked(); if (!f.length) return toast('Tick at least one column'); location.href = `/api/admin/export.${kind}?${params()}&fields=${f.join(',')}`; $('#expModal').hidden = true; toast('⬇ Download started · the admin alert email has been sent'); };
+  $('#expXlsx').addEventListener('click', () => download('xlsx'));
+  $('#expPdf').addEventListener('click', () => download('pdf'));
+  $('#xlsx').addEventListener('click', openExport); $('#pdf').addEventListener('click', openExport);
+  $('#digestNow').addEventListener('click', async (e) => {
+    e.target.disabled = true; const j = await api('/api/admin/digest', { method: 'POST' }); e.target.disabled = false;
+    toast(j.ok ? `📧 Summary emailed: ${j.untouched} untouched · ${j.overdue} overdue · ${j.dueToday} due today` : (j.error || 'Could not send'));
+  });
+
   // ---------- Team management ----------
   const initials = (n) => n.replace(/^(Dr|Mrs|Mr|Ms|Prof)\.?\s+/i, '').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   const ago = (iso) => { if (!iso) return 'never logged in'; const m = (Date.now() - new Date(iso)) / 60000; return m < 60 ? `${Math.round(m)} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`; };
@@ -529,13 +635,15 @@
   async function loadTeam() {
     const j = await api('/api/admin/users');
     const us = j.users || [];
-    $('#teamSum').textContent = `${us.filter((u) => u.active).length} active · ${us.reduce((a, u) => a + u.pushed, 0)} students pushed in total`;
+    $('#teamSum').textContent = `${us.filter((u) => u.active && u.kind !== 'caller').length} counsellors · ${us.filter((u) => u.active && u.kind === 'caller').length} callers · ${us.reduce((a, u) => a + u.pushed, 0)} students pushed`;
     $('#members').innerHTML = us.length ? us.map((u) => `<div class="mem ${u.active ? '' : 'off'}" data-id="${u.id}">
       <div class="mem-av">${esc(initials(u.name))}</div>
-      <div class="mem-n"><b>${esc(u.name)}</b><small>@${esc(u.username)}${u.mobile ? ' · ' + esc(u.mobile) : ''} · ${u.active ? ago(u.last_login) : 'disabled'}</small></div>
-      <div class="mem-s"><b>${u.pushed}</b><small>pushed</small></div><div class="mem-s"><b>${u.pushedWeek}</b><small>this week</small></div>
-      <div class="mem-s"><b>${u.assigned}</b><small>counselling</small></div><div class="mem-s"><b>${u.admitted}</b><small>admitted</small></div>
-      <div class="mem-a"><button class="view">📋 Students</button><a class="qrb" href="/qr-poster.pdf?ref=${encodeURIComponent(u.username)}" target="_blank" rel="noopener">📱 QR</a><button class="reset">🔑 Reset password</button>${u.active ? '<button class="dis">⛔ Disable</button>' : '<button class="ena">✅ Enable</button>'}</div></div>`).join('')
+      <div class="mem-n"><b>${esc(u.name)}</b> <span class="kind ${u.kind}">${u.kind === 'caller' ? '📞 Calling team' : '👤 Counsellor'}</span><small>@${esc(u.username)}${u.mobile ? ' · ' + esc(u.mobile) : ''} · ${u.active ? ago(u.last_login) : 'disabled'}</small></div>
+      ${u.kind === 'caller' ? `<div class="mem-s"><b>${u.calling}</b><small>assigned</small></div><div class="mem-s"><b>${u.called}</b><small>called</small></div>
+      <div class="mem-s ${u.untouched ? 'warn' : ''}"><b>${u.untouched}</b><small>untouched</small></div><div class="mem-s ${u.overdue ? 'warn' : ''}"><b>${u.overdue}</b><small>overdue</small></div>`
+      : `<div class="mem-s"><b>${u.pushed}</b><small>pushed</small></div><div class="mem-s"><b>${u.pushedWeek}</b><small>this week</small></div>
+      <div class="mem-s"><b>${u.assigned}</b><small>counselling</small></div><div class="mem-s"><b>${u.admitted}</b><small>admitted</small></div>`}
+      <div class="mem-a"><button class="view">📋 Students</button>${u.kind === 'caller' ? '' : `<a class="qrb" href="/qr-poster.pdf?ref=${encodeURIComponent(u.username)}" target="_blank" rel="noopener">📱 QR</a>`}<button class="reset">🔑 Reset password</button>${u.active ? '<button class="dis">⛔ Disable</button>' : '<button class="ena">✅ Enable</button>'}</div></div>`).join('')
       : '<p class="muted small">No sub-admins yet. Create the first one on the left.</p>';
   }
   $('#members').addEventListener('click', async (e) => {
@@ -543,7 +651,7 @@
     const id = card.dataset.id;
     if (e.target.classList.contains('view')) {
       FILTERS.forEach((k) => { $('#' + k).value = ''; }); level = ''; syncLevel(); fillProgrammes(); fillBranches();
-      document.querySelector('.tab[data-tab=table]').click(); $('#pushedBy').value = id; load(); return;
+      document.querySelector('.tab[data-tab=table]').click(); const u = TEAM.find((x) => x.id == id); $(u && u.kind === 'caller' ? '#caller' : '#pushedBy').value = id; load(); return;
     }
     if (e.target.classList.contains('reset')) {
       const j = await api(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ resetPassword: true }) });
@@ -558,7 +666,7 @@
     e.preventDefault();
     const f = e.target, msg = $('#userMsg'); msg.textContent = '';
     const r = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
-      body: JSON.stringify({ name: f.elements['name'].value, username: f.username.value, mobile: f.mobile.value, password: f.password.value }) });
+      body: JSON.stringify({ kind: (f.querySelector('[name=kind]:checked') || {}).value, name: f.elements['name'].value, username: f.username.value, mobile: f.mobile.value, password: f.password.value }) });
     const j = await r.json();
     if (!r.ok) { msg.textContent = j.error || 'Could not create the account.'; return; }
     showPw(j.user, j.password, `✅ Account created for ${j.user.name}`);

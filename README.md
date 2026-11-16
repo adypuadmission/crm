@@ -157,6 +157,25 @@ Indian SMS rules (TRAI DLT) require a registered **sender ID** and **approved te
 - **Default (free):** it answers from the built-in knowledge base taken from adypu.edu.in.
 - **AI mode:** set `ANTHROPIC_API_KEY` and Claude answers questions in natural language, in English, Hindi or Marathi. It's still restricted to the same facts and told never to invent fees, rankings or approvals. If the AI is unavailable, it falls back to the knowledge base automatically.
 
+## 📞 Calling team, follow-ups & smart exports
+
+**Two separate kinds of team accounts** (Team tab → Create an account):
+- **Counsellor (data entry):** adds / uploads students and has a personal QR code. Sees only students they pushed. Cannot call from the portal.
+- **Calling team:** sees only the students the admin assigns to them **for calling**, in a *Calling Workspace* with *Due today · Overdue · Not called yet · Upcoming* lists.
+
+**Calling assignment is separate from the data counsellor.** Every student has a "Counsellor (data)" and an "Assigned caller". The admin assigns callers in Enquiries → *Calling assignment*:
+1. **Selected students:** tick rows → choose caller → *Assign selected*.
+2. **Share filtered students fairly:** filter (e.g. Region = Nashik, Programme = MBA) → tick callers → *Share now*. Students are split by each caller's current workload.
+3. **Automatic by region:** *Set region rules*. New enquiries go turn-by-turn to the callers set for their region.
+
+**Secure calling:** callers see masked numbers. *📞 Call* / *💬 WhatsApp* releases the number for a single tap, only for students assigned to that caller. Every dial is logged, and more than 80 dials in an hour is blocked and alerts the admin.
+
+**Call log:** after each call the caller records the result (Connected, Not picked, Busy, Switched off, Not reachable, Wrong number, Call back later), feedback, new status and next follow-up date. The admin sees the full history (📞 badge in the Caller column) and can filter *Untouched / Overdue / Due today / Upcoming / Called*.
+
+**Daily 9 AM email:** untouched enquiries (24 h+), overdue follow-ups and today's follow-ups, per caller. It contains no student names or numbers. You can also send it any time with *Team → Send today's summary email*.
+
+**Downloads with chosen columns:** Excel / PDF open a tick-box list (22 columns including caller, calls, last result, latest feedback, next follow-up, updated on). The choice is remembered.
+
 ## 🛡️ Data protection (maximum security mode)
 
 **Only the main admin can see full contact details or download data.**
