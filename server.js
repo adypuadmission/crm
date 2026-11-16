@@ -87,6 +87,7 @@ app.use(helmet({
     },
   },
 }));
+app.use(require('compression')());
 app.use(express.json({ limit: '20kb' }));
 // Never let browsers or proxies cache private pages, data or exports
 app.use(['/admin', '/team', '/api/admin', '/api/team', '/api/security'], (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); res.set('Pragma', 'no-cache'); next(); });
@@ -207,7 +208,9 @@ function validateEnquiry(body) {
 }
 
 // ---------- public routes ----------
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', extensions: ['html'] }));
+// Static files: compressed and cached by browsers (1 day) so repeat visits open instantly
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', extensions: ['html'], maxAge: '1d',
+  setHeaders: (res, file) => { if (file.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache'); } }));
 
 app.post('/', (_req, res) => res.redirect(303, '/'));
 // ---------- QR codes ("scan to fill on your phone") ----------

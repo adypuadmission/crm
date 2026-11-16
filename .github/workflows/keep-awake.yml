@@ -1,0 +1,14 @@
+# Keeps the free Render instance awake so students never wait ~50 s for the page to load.
+# Pings /healthz (no database access) every 10 minutes.
+name: Keep site awake
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping
+        run: curl -fsS --retry 3 --retry-delay 20 --max-time 90 https://adypu-admission.onrender.com/healthz
