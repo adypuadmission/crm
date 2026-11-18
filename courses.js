@@ -32,7 +32,8 @@ const CATALOGUE = {
     ['School of Science', 'M.Sc Physics', '⚛️', [['', 175000]]],
   ],
 };
-const FEE_YEAR = 'AY 2026-27';
+// Admissions are for AY 2027-28; until the 2027-28 fee structure is published, the AY 2026-27 fees are shown as indicative.
+const FEE_YEAR = 'AY 2027-28, indicative as per AY 2026-27 fee structure';
 
 const LEVELS = Object.fromEntries(Object.entries(CATALOGUE).map(([lv, list]) => [lv, list.map(([school, name, icon, specs]) => {
   const branches = specs.map((s) => s[0]).filter(Boolean);
