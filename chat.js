@@ -5,8 +5,9 @@ const { LEVELS, ENGINEERING_BRANCHES, FEE_TABLE, FEE_YEAR } = require('./courses
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 const normP = (x) => String(x).toLowerCase().replace(/[^a-z]/g, '');
 function feeReply(t) {
-  const q = normP(t);
-  const progs = [...new Set(FEE_TABLE.map((r) => r.programme))].filter((p) => q.includes(normP(p).replace(/hons|honours/, '')) || (normP(p) === 'law' && /llb|law/.test(q)));
+  const words = (x) => String(x).toLowerCase().replace(/\./g, '').replace(/\((honours|hons)\)|admin|mgmt|&/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
+  const q = ` ${words(t)} `, qc = q.replace(/ /g, '');
+  const progs = [...new Set(FEE_TABLE.map((r) => r.programme))].filter((p) => { const k = words(p); return q.includes(` ${k} `) || (k.length > 4 && qc.includes(k.replace(/ /g, ''))) || (k === 'law' && /\b(llb|law)\b/.test(q)); });
   const rows = progs.length ? FEE_TABLE.filter((r) => progs.includes(r.programme)) : [];
   if (rows.length) return `Annual tuition fees (${FEE_YEAR}):\n` + rows.map((r) => `• ${r.programme}${r.branch ? ' – ' + r.branch : ''}: **${inr(r.fee)}**`).join('\n') + '\n\nHostel, exam and other charges are extra. The admissions team will confirm the full fee and any scholarship.';
   const by = {}; FEE_TABLE.forEach((r) => { by[r.programme] = by[r.programme] || []; by[r.programme].push(r.fee); });
