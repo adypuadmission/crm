@@ -2,17 +2,15 @@
 // Sends the portal's security alerts AND student emails (admission form links, follow-ups) from YOUR Gmail over HTTPS
 // (Render's free plan blocks normal email ports).
 //
-// Security: alerts can only go to ALERT_TO. Emails to anyone else (students) are sent ONLY when the request carries
-// the secret below, so a leaked web-app link cannot be used to spam people.
+// Security: alerts go only to ALERT_TO. For any other address (a student), this script first asks the CRM
+// whether it really sent that email (one-time code, valid 2 minutes). A leaked web-app link therefore cannot
+// be used to email anyone else. No password or secret needs to be stored here.
 //
-// SET-UP / UPDATE (5 minutes):
-// 1. Replace the whole code in your existing Apps Script project with this file.
-// 2. Put a long random secret in SECRET below (the admin dashboard → Admissions tab shows one you can use).
-// 3. Deploy → Manage deployments → ✏️ Edit → Version: "New version" → Deploy   (the web-app link stays the same).
-// 4. On Render → Environment, add MAIL_WEBHOOK_SECRET = the same secret, and save.
-// Note: a free Gmail account can email about 100 people a day.
+// UPDATE (3 minutes): replace all code with this file → Save → Deploy → Manage deployments → ✏️ Edit →
+// Version: "New version" → Deploy → approve the new permission ("connect to an external service").
+// The web-app link stays the same. A free Gmail account can email about 100 people a day.
 const ALERT_TO = 'associatedeanacademic@adypu.edu.in';
-const SECRET = 'PASTE-THE-SAME-SECRET-AS-MAIL_WEBHOOK_SECRET-ON-RENDER';
+const CRM = 'https://adypu-admission.onrender.com';
 
 function doGet() {
   return ContentService.createTextOutput('adypu-mailer v2');
@@ -23,7 +21,8 @@ function doPost(e) {
     const d = JSON.parse(e.postData.contents);
     let to = ALERT_TO;
     if (d.to && String(d.to).toLowerCase() !== ALERT_TO.toLowerCase()) {
-      if (!SECRET || SECRET.indexOf('PASTE-') === 0 || d.secret !== SECRET) return ContentService.createTextOutput('error: not allowed');
+      const check = UrlFetchApp.fetch(CRM + '/api/mail/verify?n=' + encodeURIComponent(d.nonce || '') + '&to=' + encodeURIComponent(String(d.to)), { muteHttpExceptions: true });
+      if (check.getContentText() !== 'yes') return ContentService.createTextOutput('error: not allowed');
       to = String(d.to);
     }
     const msg = {
@@ -44,4 +43,5 @@ function doPost(e) {
 // Run this once from the editor (▶ Run) to approve sending and receive a test email.
 function testAlert() {
   MailApp.sendEmail(ALERT_TO, 'ADYPU CRM – mailer test', 'If you can read this, the CRM can send email.');
+  UrlFetchApp.fetch(CRM + '/healthz');
 }

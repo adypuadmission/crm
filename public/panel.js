@@ -121,7 +121,7 @@
   }
   function renderForm() {
     const open = S.apps.find((a) => !['Cancelled', 'Paid'].includes(a.status));
-    $('#spForm').innerHTML = `<b>🎓 Admission form & fee payment</b>
+    $('#spForm').innerHTML = `<b>🎓 Send the admission form</b> <span class="small muted">Step 1: create the link · Step 2: send it by WhatsApp / email</span>
       <p class="small muted">Create a personal link for the student. They fill the full application (as on the printed form), upload documents and pay the admission fee online / UPI / bank transfer / at campus.</p>
       <div class="sp-type"><label><input type="radio" name="spType" value="Provisional" ${!open || open.type === 'Provisional' ? 'checked' : ''}><span><b>Provisional admission</b><small>Seat blocked with the provisional fee${S.provisionalFee ? ' (' + inr(S.provisionalFee) + ')' : ''}; documents can follow</small></span></label>
         <label><input type="radio" name="spType" value="Permanent" ${open && open.type === 'Permanent' ? 'checked' : ''}><span><b>Permanent admission</b><small>Full first-year fee${S.fee ? ' (' + inr(S.fee) + ' for ' + esc(S.row.course) + ', ' + esc(S.feeYear) + ')' : ''}</small></span></label></div>
@@ -133,8 +133,13 @@
     const j = await api(`/api/student/${S.row.id}/application`, { method: 'POST', body: JSON.stringify({ type, email: $('#spMailToo') && $('#spMailToo').checked }) });
     btn.disabled = false;
     if (!j.ok) return toast(j.error || 'Could not create the form');
-    toast(j.emailError ? `Link ready · email not sent: ${j.emailError}` : j.emailed ? '✅ Form link created and emailed' : '✅ Form link ready — share it by WhatsApp or copy it');
-    await reload(); showPane('spForm'); renderForm();
+    await reload();
+    if (j.emailed) { toast(`✅ Form link created and emailed to the student${S.canDial ? ' — you can also WhatsApp it' : ''}`); showPane(null); return; }
+    if (j.emailError) toast(`Link ready · email not sent: ${j.emailError}`);
+    // next step: actually send it — WhatsApp (own phone) if allowed, else email
+    if (S.canDial) { $('#spModal').querySelector('[data-act=whatsapp]').click(); useTpl('form'); toast('✅ Link ready — press "Open WhatsApp" to send it to the student'); }
+    else if (S.hasEmail && S.emailReady) { $('#spModal').querySelector('[data-act=email]').click(); useTpl('form'); toast('✅ Link ready — press "Send email" to send it'); }
+    else { showPane(null); toast('✅ Link ready — copy it below and send it to the student'); }
   }
   const APP_CLS = { Sent: 'sent', Opened: 'open', Submitted: 'sub', 'Payment pending': 'pend', 'Part paid': 'pend', Paid: 'paid', Cancelled: 'can' };
   function renderApps() {

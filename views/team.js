@@ -144,6 +144,7 @@
     const j = await api(`/api/team/enquiries/${LOG.r.id}/calls`, { method: 'POST', body: JSON.stringify({ outcome: LOG.outcome, feedback: f.feedback.value, status: f.status.value, next_action_date: f.next.value, channel: LOG.via }) });
     if (!j.ok) return toast(j.error || 'Could not save');
     $('#logModal').hidden = true; toast(`✅ Saved · ${LOG.outcome}${f.next.value ? ' · next follow-up ' + dShort(f.next.value) : ''}`); loadCalls();
+    if (f.status.value === 'Form Sent') window.StudentPanel.open(LOG.r.id, { pane: 'form', onClose: loadCalls });
   });
 
   // ---------- my students ----------
@@ -203,6 +204,11 @@
   });
   $('#rows').addEventListener('change', async (e) => {
     const tr = e.target.closest('tr'); if (!tr) return;
+    if (e.target.classList.contains('st') && e.target.value === 'Form Sent') {
+      const r = rows.find((x) => x.id == tr.dataset.id); e.target.value = r.status;
+      toast('🎓 Create the admission form link, then send it by WhatsApp or email');
+      return window.StudentPanel.open(r.id, { pane: 'form', onClose: load });
+    }
     const patch = e.target.classList.contains('st') ? { status: e.target.value } : e.target.classList.contains('note') ? { notes: e.target.value } : null;
     if (!patch) return;
     const j = await api(`/api/team/enquiries/${tr.dataset.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
@@ -218,7 +224,7 @@
       <div class="mem-s"><b>${u.assigned}</b><small>assigned</small></div><div class="mem-s"><b>${u.called}</b><small>called</small></div><div class="mem-s ${u.untouched ? 'warn' : ''}"><b>${u.untouched}</b><small>untouched</small></div><div class="mem-s"><b>${u.interested}</b><small>interested</small></div>
       <div class="mem-a"><button class="reset" type="button">🔑 Reset password</button>${u.active ? '<button class="dis" type="button">⛔ Disable</button>' : '<button class="ena" type="button">✅ Enable</button>'}</div></div>`).join('')
       : '<p class="muted small">No callers in your team yet. Create one on the left, then tick students in "My students" and assign them.</p>';
-    const opts = j.callers.filter((u) => u.active).map((u) => `<option value="${u.id}">📞 ${esc(u.name)}</option>`).join('') + (j.aiCaller ? `<option value="${j.aiCaller.id}">🤖 AI Caller</option>` : '');
+    const opts = j.callers.filter((u) => u.active).map((u) => `<option value="${u.id}">📞 ${esc(u.name)}</option>`).join('') + (j.aiCaller ? `<option value="${j.aiCaller.id}">🤖 AI Caller${j.aiCaller.connected ? '' : ' (not connected yet)'}</option>` : '');
     $('#asCaller').innerHTML = '<option value="">Choose caller…</option>' + opts;
     renderAssignBar();
   }

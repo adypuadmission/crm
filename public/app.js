@@ -169,6 +169,20 @@
     mobileEl.readOnly = !!verified || !$('#otpBox').hidden;
     updateProgress();
   }
+  // early warning: this mobile number is already registered
+  let lastChecked = '';
+  mobileEl.addEventListener('input', async () => {
+    const v = mobileEl.value.replace(/\D/g, '');
+    let note = $('#dupNote');
+    if (!note) { note = document.createElement('p'); note.id = 'dupNote'; note.className = 'dup-note'; note.hidden = true; mobileEl.closest('.field, label, div').after(note); }
+    if (v.length !== 10) { note.hidden = true; return; }
+    if (v === lastChecked) return; lastChecked = v;
+    try {
+      const j = await fetch('/api/enquiry/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mobile: v }) }).then((r) => r.json());
+      note.hidden = !j.exists;
+      note.textContent = 'ℹ This mobile number is already registered with us. Submitting again will update your existing enquiry — it will not create a new one.';
+    } catch { note.hidden = true; }
+  });
   mobileEl.addEventListener('input', (e) => {
     e.target.value = e.target.value.replace(/\D/g, '').slice(0, 10);
     if (otp.mobile && otp.mobile !== e.target.value) { otp.token = null; otp.mobile = null; }
@@ -311,7 +325,8 @@
     const first = (j.name || d.student_name).trim().split(' ')[0];
     $('#successTitle').textContent = j.duplicate ? `Welcome back, ${first}!` : `You're on your way, ${first}!`;
     $('#successMsg').textContent = j.duplicate
-      ? `We already have your enquiry for ${d.course}. Our counsellor will be in touch soon.`
+      ? (j.otherCourse ? `You are already registered with us (same mobile number). We have added ${d.course} to your existing enquiry — no new entry was created. Our counsellor will be in touch soon.`
+        : `You are already registered with us for ${d.course} (same mobile number), so no new entry was created. Our counsellor will be in touch soon.`)
       : `Thank you for choosing ${d.course}. Our admission counsellor will contact you shortly.`;
     $('#refNo').textContent = j.ref_no;
     $('#smsNote').hidden = !j.smsSent || j.duplicate;

@@ -71,10 +71,18 @@ const SMTP_USER = process.env.SMTP_USER || ALERT_EMAIL_TO;
 // Hosts like Render's free plan block SMTP ports. MAIL_WEBHOOK_URL = a Google Apps Script web app (see google-apps-script/alert-mailer.gs)
 // that sends the email from the admin's Gmail over HTTPS. It is used first when set.
 const MAIL_WEBHOOK_URL = process.env.MAIL_WEBHOOK_URL || '';
+// Emails to anyone other than the admin carry a one-time code; the mailer script asks this server (/api/mail/verify)
+// whether the CRM really sent it — so a leaked mailer link cannot be used to email other people.
+const mailNonces = new Map();
 if (MAIL_WEBHOOK_URL) {
   mailer = { sendMail: async (m) => {
+    let nonce;
+    if (String(m.to || '').toLowerCase() !== String(ALERT_EMAIL_TO).toLowerCase()) {
+      nonce = crypto.randomBytes(18).toString('base64url');
+      mailNonces.set(nonce, { to: String(m.to).toLowerCase(), exp: Date.now() + 2 * 60 * 1000 });
+    }
     const r = await fetch(MAIL_WEBHOOK_URL, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', to: m.to, subject: m.subject, text: m.text, html: m.html, name: m.name, replyTo: m.replyTo }) });
+      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', nonce, to: m.to, subject: m.subject, text: m.text, html: m.html, name: m.name, replyTo: m.replyTo }) });
     const body = await r.text();
     if (!r.ok || !/^ok/.test(body.trim())) throw new Error(`mail relay replied ${r.status}: ${body.replace(/<[^>]+>/g, ' ').trim().slice(0, 100)}`);
   } };
@@ -385,6 +393,13 @@ async function sendConfirmation(row) {
 const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false,
   message: { error: 'Too many submissions from this network. Please try again after some time.' } });
 
+// Lets the form warn early that a mobile number is already registered (yes/no only, rate-limited)
+const checkLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false, message: { exists: false } });
+app.post('/api/enquiry/check', checkLimiter, async (req, res) => {
+  const mobile = normMobile(req.body.mobile);
+  if (!/^[6-9]\d{9}$/.test(mobile)) return res.json({ exists: false });
+  res.json({ exists: !!(await db.findSameStudent(mobile, null)) });
+});
 app.post('/api/enquiry', submitLimiter, async (req, res) => {
   try {
     if (req.body.website) return res.json({ ok: true, ref_no: 'ADYPU-OK' }); // honeypot: silently drop bots
@@ -392,8 +407,17 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
     if (Object.keys(errors).length) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: errors });
     const verified = checkVerifiedToken(req.body.otpToken, data.mobile);
     if ((await otpOn()) && !verified) return res.status(401).json({ error: 'Please verify your mobile number with the OTP.', needOtp: true });
-    const dup = await db.findRecentDuplicate(data.mobile, data.course);
-    if (dup) return res.json({ ok: true, ref_no: dup.ref_no, duplicate: true, name: dup.student_name });
+    // One student = one entry: the same mobile number (or email) is never stored twice.
+    // A new programme is added to the existing entry as a note + timeline event instead.
+    const dup = await db.findSameStudent(data.mobile, null); // same email only flags a possible duplicate (siblings may share a parent's email)
+    if (dup) {
+      const note = dup.course === data.course ? '' : `Also interested in ${data.course}`;
+      const when = new Date().toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' });
+      if (note && !String(dup.notes || '').includes(note)) await db.updateEnquiry(dup.id, { notes: [dup.notes, `${note} (${when})`].filter(Boolean).join(' | ').slice(0, 500) });
+      await db.addEvent(dup.id, 'Student', 'created', `Submitted the enquiry form again${note ? ' · ' + note : ''} — not saved as a new entry`);
+      audit(req, 'duplicate_enquiry_merged', dup.ref_no, 'info', { username: 'website' });
+      return res.json({ ok: true, ref_no: dup.ref_no, duplicate: true, name: dup.student_name, otherCourse: !!note, counsellor: await counsellorOf(dup) });
+    }
     // Came from a counsellor's personal QR? Credit the enquiry to them.
     const refUser = req.body.ref ? await db.getUserAuth(refSlug(req.body.ref)) : null;
     const attribution = refUser && Number(refUser.active)
@@ -529,8 +553,8 @@ async function pushStudent(body, me, sendSms) {
   if (!clean(body.city, 60) && body.data_location) body = { ...body, city: String(body.data_location).split(',')[0] };
   const { errors, data } = teamData(body);
   if (Object.keys(errors).length) return { errors };
-  // Duplicate check: same mobile number OR same email, for any programme
-  const existing = await db.findSameStudent(data.mobile, data.email);
+  // Duplicate check: the same mobile number (any programme) is blocked; the same email is flagged as a possible duplicate
+  const existing = await db.findSameStudent(data.mobile, null);
   if (existing) return { duplicate: existing };
   const row = await db.insertEnquiry({ ...data, source: 'subadmin', created_by_id: me.id, created_by_name: me.name, counsellor_id: me.id, counsellor_name: me.name });
   db.addEvent(row.id, me.name, 'created', `Added by ${me.name}${data.data_source ? ' · source: ' + data.data_source : ''}${data.data_location ? ' · ' + data.data_location : ''}`).catch(() => {});
@@ -784,8 +808,9 @@ const pickFilters = (q) => ({ dataSource: q.dataSource, appStatus: q.appStatus, 
 app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
   const rows = await db.listEnquiries(pickFilters(req.query));
   const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active, kind: u.kind, parent_id: u.parent_id }));
+  const aiReady = !!(process.env.VAPI_API_KEY && process.env.VAPI_ASSISTANT_ID && process.env.VAPI_PHONE_NUMBER_ID) || !!process.env.AI_CALLER_WEBHOOK_URL;
   const sources = (await db.all("SELECT data_source AS s, COUNT(*) AS n FROM enquiries WHERE data_source IS NOT NULL AND data_source <> '' GROUP BY data_source ORDER BY n DESC LIMIT 200")).map((x) => ({ s: x.s, n: Number(x.n) }));
-  res.json({ sources, rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team, unseenAlerts: await db.countUnseenAlerts() });
+  res.json({ aiReady, sources, rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team, unseenAlerts: await db.countUnseenAlerts() });
 });
 
 app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res) => {
@@ -1174,6 +1199,12 @@ setInterval(() => {
 require('./plus')(app, { db, sec, audit, notifyAdmin, requireAdmin, requireSub, requireXhr, readToken, getMailer: () => mailer, ALERT_EMAIL_TO, ADMIN_NAME, ADMIN_USER, STATUSES,
   CALL_OUTCOMES, LEVELS, ACADEMIC_YEAR, CONTACTS, PUBLIC_URL, IS_PROD, teamRow, masked, counsellorOf, istToday, clean, sendView, bcrypt, genPassword, sms, express, rateLimit, QRCode, PDFDocument, ExcelJS, dupMessage, validDate });
 
+app.get('/api/mail/verify', (req, res) => {
+  const n = mailNonces.get(String(req.query.n || '')); const to = String(req.query.to || '').toLowerCase();
+  for (const [k, v] of mailNonces) if (v.exp < Date.now()) mailNonces.delete(k);
+  if (n && n.exp > Date.now() && n.to === to) { mailNonces.delete(String(req.query.n)); return res.type('text').send('yes'); }
+  res.type('text').send('no');
+});
 app.get('/healthz', (_req, res) => res.send('ok'));
 app.use((_req, res) => res.redirect('/'));
 

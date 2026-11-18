@@ -42,7 +42,6 @@ module.exports = function plus(app, C) {
   async function studentEmailReady() {
     const m = C.getMailer(); if (!m) return false;
     if (!process.env.MAIL_WEBHOOK_URL) return true; // SMTP can send anywhere
-    if (!process.env.MAIL_WEBHOOK_SECRET) return false;
     if (Date.now() - relay.at < 10 * 60 * 1000) return relay.ok;
     try { const r = await fetch(process.env.MAIL_WEBHOOK_URL, { redirect: 'follow', signal: AbortSignal.timeout(8000) }); relay = { at: Date.now(), ok: /adypu-mailer v2/.test(await r.text()) }; }
     catch { relay = { at: Date.now(), ok: false }; }
@@ -50,7 +49,7 @@ module.exports = function plus(app, C) {
   }
   async function emailStudent(row, subject, text, fromName) {
     if (!row.email) throw new Error('This student has no email address.');
-    if (!(await studentEmailReady())) throw new Error('Student email is not switched on yet (update the Google mailer script — see the Admissions tab).');
+    if (!(await studentEmailReady())) throw new Error('Student email is not switched on yet (the Google mailer script needs version 2 — see Admissions tab).');
     const s = await db.getSetting('admission_settings', {});
     const safe = String(text).replace(/[<&>]/g, (c) => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;' }[c])).replace(/(https?:\/\/\S+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>');
     await C.getMailer().sendMail({ to: row.email, subject, text, name: fromName || 'ADYPU Admissions', replyTo: s.replyTo || undefined,
@@ -132,7 +131,7 @@ module.exports = function plus(app, C) {
   app.get('/api/team/my-team', requireCounsellor, async (req, res) => {
     const callers = await myCallers(req.user), rows = await db.listEnquiries({ scopeUser: req.user.id, scopeCallers: callers.map((c) => c.id) }), t = C.istToday();
     const ai = await aiUser(); const aiOn = (await aiSettings()).enabled;
-    res.json({ aiCaller: aiOn ? { id: ai.id, name: ai.name } : null, callers: callers.map((u) => { const mine = rows.filter((r) => r.caller_id === u.id);
+    res.json({ aiCaller: aiOn ? { id: ai.id, name: ai.name, connected: provider() !== 'none' } : null, callers: callers.map((u) => { const mine = rows.filter((r) => r.caller_id === u.id);
       return { id: u.id, name: u.name, username: u.username, active: u.active, last_login: u.last_login, mobile: sec.maskMobile(u.mobile), assigned: mine.length, called: mine.filter((r) => r.call_count > 0).length,
         untouched: mine.filter((r) => !r.call_count && r.status === 'New').length, overdue: mine.filter((r) => r.next_action_date && r.next_action_date < t && !['Admitted', 'Not Interested'].includes(r.status)).length,
         interested: mine.filter((r) => ['Interested', 'Counselling Done', 'Form Sent', 'Applied', 'Admitted'].includes(r.status)).length }; }) });

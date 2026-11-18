@@ -16,7 +16,7 @@
   };
   const FILTERS = ['dataSource', 'appStatus', 'pushedBy', 'counsellor', 'caller', 'follow', 'q', 'programme', 'branch', 'region', 'status', 'verified', 'from', 'to'];
   let TEAM = [], STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [], allRows = [], inited = false, level = '', trendDays = 14;
-  let sort = { key: 'date', dir: 'desc' };
+  let sort = { key: 'date', dir: 'desc' }, AI_READY = false;
 
   // ---------- helpers ----------
   const params = () => {
@@ -44,7 +44,7 @@
   async function load() {
     const qs = params();
     const [j, everything] = await Promise.all([api('/api/admin/enquiries?' + qs), api('/api/admin/enquiries')]);
-    rows = j.rows; allRows = everything.rows; STATUSES = j.statuses; LEVELS = j.levels || LEVELS; TEAM = j.team || []; fillTeamSelects(); fillSources(j.sources || []);
+    rows = j.rows; allRows = everything.rows; STATUSES = j.statuses; LEVELS = j.levels || LEVELS; TEAM = j.team || []; AI_READY = !!j.aiReady; fillTeamSelects(); fillSources(j.sources || []);
     if (!inited) init(j);
     if (j.unseenAlerts !== undefined) setAlerts(j.unseenAlerts);
     render();
@@ -84,7 +84,7 @@
     [['pushedBy', '<option value="">All sources</option><option value="web">🌐 Website form</option>', COUNS], ['counsellor', '<option value="">All counsellors</option><option value="none">⚠ Unassigned</option>', COUNS],
      ['caller', '<option value="">All callers</option><option value="none">📵 No caller</option>', CALLERS], ['selCaller', '<option value="">Choose caller…</option>', CALLERS.filter((u) => u.active)]].forEach(([id, base, list]) => {
       const el = $('#' + id), cur = el.value;
-      el.innerHTML = base + list.map((u) => `<option value="${u.id}">${kIcon(u)} ${esc(u.name)}${esc(parentName(u))}</option>`).join('');
+      el.innerHTML = base + list.map((u) => `<option value="${u.id}">${kIcon(u)} ${esc(u.name)}${esc(parentName(u))}${u.kind === 'ai' && !AI_READY ? ' (not connected yet)' : ''}</option>`).join('');
       el.value = [...el.options].some((o) => o.value === cur) ? cur : '';
     });
   }
@@ -463,6 +463,12 @@
       renderPerf(); renderInsights();
       return;
     }
+    if (e.target.classList.contains('st') && e.target.value === 'Form Sent') {
+      // choosing "Form Sent" must actually create and send the admission form, not just change a label
+      const r = rows.find((x) => x.id == id); e.target.value = r.status;
+      toast('🎓 Create the admission form link, then send it by WhatsApp or email');
+      window.StudentPanel.open(r.id, { pane: 'form', onClose: load }); return;
+    }
     if (e.target.classList.contains('st')) {
       const { row } = await api(`/api/admin/enquiries/${id}`, { method: 'PATCH', body: JSON.stringify({ status: e.target.value }) });
       [rows, allRows].forEach((list) => { const x = list.find((r) => r.id == id); if (x) Object.assign(x, row); });
@@ -515,7 +521,8 @@
   async function assignIds(ids, callerId) {
     const j = await api('/api/admin/assign', { method: 'POST', body: JSON.stringify({ ids, counsellor_id: callerId || null }) });
     if (j.error) return toast(j.error);
-    toast(callerId ? `✅ ${j.assigned} students assigned to ${j.to} for calling` : `${j.assigned} students now have no caller`); SEL.clear(); load();
+    const isAi = (TEAM.find((u) => u.id == callerId) || {}).kind === 'ai';
+    toast(callerId ? `✅ ${j.assigned} students assigned to ${j.to} for calling${isAi && !AI_READY ? ' — ⚠ the AI caller is not connected yet, so no calls will be made (Team & AI tab)' : ''}` : `${j.assigned} students now have no caller`); SEL.clear(); load();
   }
   $('#assignSel').addEventListener('click', () => { if (!SEL.size) return toast('Tick students in the table first'); if (!$('#selCaller').value) return toast('Choose a caller'); assignIds([...SEL], $('#selCaller').value); });
   $('#unassignSel').addEventListener('click', () => { if (!SEL.size) return toast('Tick students in the table first'); assignIds([...SEL], null); });
@@ -526,7 +533,7 @@
     if (!confirm(`Share ${$('#onlyUn').checked ? 'the students without a caller among the' : 'all'} ${rows.length} filtered students between ${ids.length} caller(s)?`)) return;
     const j = await api('/api/admin/distribute', { method: 'POST', body: JSON.stringify({ filters: f, counsellors: ids, onlyUnassigned: $('#onlyUn').checked }) });
     if (j.error) return toast(j.error);
-    toast(`✅ ${j.total} students shared (balanced by each caller's current workload): ` + j.result.map((x) => `${x.name} +${x.count}`).join(' · ')); load();
+    toast(`✅ ${j.total} students shared (balanced by each caller's current workload): ` + j.result.map((x) => `${x.name} +${x.count}`).join(' · ') + (j.result.some((x) => x.name === 'AI Caller') && !AI_READY ? ' — ⚠ AI caller not connected yet' : '')); load();
   });
   $('#rows').addEventListener('change', async (e) => {
     if (!e.target.classList.contains('cl')) return;
@@ -759,13 +766,10 @@
     Object.entries(j.settings).forEach(([k, v]) => { const el = f.elements[k]; if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? ''; });
     $('#rzpState').textContent = j.razorpay ? '✅ Razorpay keys set' : '(add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on Render to activate)';
     $('#mailState').textContent = j.emailReady ? '🟢 Ready' : '⚪ Not set up'; $('#mailState').className = 'ai-state ' + (j.emailReady ? 'on' : '');
-    const secret = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 56]).join('');
-    $('#mailSetup').innerHTML = j.emailReady ? '<p class="small">✅ Student emails are working. Form links and messages are sent from the admission Gmail; replies go to the reply-to address.</p>'
-      : `<ol class="small"><li>Open your Google Apps Script mailer (script.google.com) and replace the code with the new <b>google-apps-script/alert-mailer.gs</b> from the GitHub repo (version 2).</li>
-        <li>In that code set <code>SECRET</code> to:<div class="copyrow"><input readonly value="${secret}"><button class="btn xs ghost" data-copy="${secret}" type="button">Copy</button></div></li>
-        <li>Deploy → Manage deployments → ✏️ → Version: <b>New version</b> → Deploy (the link stays the same).</li>
-        <li>On Render → Environment add <code>MAIL_WEBHOOK_SECRET</code> = the same secret, and save.</li></ol>
-        <p class="small muted">${j.relaySecret ? 'MAIL_WEBHOOK_SECRET is set — waiting for the new script version.' : 'Until then, share form links by WhatsApp or copy the link.'}</p>`;
+    $('#mailSetup').innerHTML = j.emailReady ? '<p class="small">✅ Student emails are working. Form links and messages go from the admission Gmail; replies go to the reply-to address. (A free Gmail account can send about 100 emails a day.)</p>'
+      : `<ol class="small"><li>Open your mailer project on <b>script.google.com</b> and replace all its code with <b>google-apps-script/alert-mailer.gs</b> (version 2) from the GitHub repo. No password or secret is needed.</li>
+        <li>Save → Deploy → Manage deployments → ✏️ → Version: <b>New version</b> → Deploy, and allow the new permission (it lets the script check with the CRM before emailing a student).</li></ol>
+        <p class="small muted">Until then, share form links by WhatsApp or copy the link.</p>`;
     $('#feeYear').textContent = j.feeYear;
     $('#feeRows').innerHTML = j.feeTable.map((r) => `<tr><td>${esc(r.level)}</td><td>${esc(r.school.replace('School of ', ''))}</td><td>${esc(r.programme)}</td><td>${esc(r.branch || '—')}</td><td class="nowrap"><b>${inr(r.fee)}</b></td></tr>`).join('');
   }
