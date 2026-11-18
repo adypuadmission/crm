@@ -1,8 +1,13 @@
 (() => {
   const ICONS = {
-    'Computer Science & Engineering': '💻', 'Software Engineering': '🧩', 'Cybersecurity': '🛡️',
-    'AI & Data Science': '🤖', 'Biomedical Engineering': '🫀', 'Biotechnology': '🧬',
-    'Mechanical Engineering': '⚙️', 'Robotics & Automation': '🦾', 'Electronics & Computer Engineering': '🔌', 'Civil Engineering': '🏗️',
+    'CSE – Cyber Security': '🛡️', 'CSE – Software Engineering': '🧩', 'Artificial Intelligence & Data Science': '🤖', 'Electronics & Computer Engineering': '🔌',
+    'Civil Engineering': '🏗️', 'Mechanical – Automobile Engineering': '🚗', 'Mechanical – 3D Printing & Design': '🖨️', 'Biotechnology – Medical': '🧬',
+    'Biotechnology – Bioinformatics': '🧪', 'Biotechnology – Food Technology': '🥗', 'Biomedical Engineering': '🫀', 'AI & Machine Learning': '🤖', 'Biomedical': '🫀',
+    'Biotechnology': '🧬', 'Construction': '🏗️', 'Robotics': '🦾', 'Electric Vehicles': '🔋', 'Sales & Marketing': '📣', 'Finance': '💹', 'Entrepreneurship & Innovation': '🚀',
+    'Fintech': '💳', 'Marketing': '📣', 'Transportation Design': '🚘', 'UI / UX Design': '📱', 'Product Design': '📦', 'Visual Communication': '🖼️', 'Fashion Design': '👗',
+    'Interior Design': '🛋️', 'BA LLB': '⚖️', 'BBA LLB': '⚖️', 'LLB': '⚖️', 'Culinary Arts': '👨‍🍳', 'Travel & Tourism': '✈️', 'Hotel Management': '🏨', 'Physics': '⚛️',
+    'Computer Science': '💻', 'Data Science': '📊', 'Forensics': '🔍', 'English': '📖', 'Psychology': '🧠', 'Economics': '📈', 'International Studies': '🌍',
+    '6 Months': '🗓️', '3 Months': '🗓️', 'Industrial Psychology': '🏭', 'Counselling Psychology': '🫶',
   };
   const PROG = {
     'B.Tech': ['🛠️', 'Engineering · 10 branches'], 'Law': ['⚖️', 'School of Law'], 'Design': ['🎨', 'School of Design'], 'Hotel Management': ['🏨', 'Hospitality'],
@@ -73,9 +78,9 @@
       lab.className = 'prog'; lab.style.animationDelay = `${i * 50}ms`;
       const inp = document.createElement('input');
       inp.type = 'radio'; inp.name = 'programme'; inp.value = p.name; inp.checked = p.name === sel.programme;
-      const ic = document.createElement('span'); ic.className = 'pi'; ic.textContent = (PROG[p.name] || ['🎓'])[0];
+      const ic = document.createElement('span'); ic.className = 'pi'; ic.textContent = p.icon || (PROG[p.name] || ['🎓'])[0];
       const tx = document.createElement('span'); tx.textContent = p.name;
-      const sm = document.createElement('small'); sm.textContent = (PROG[p.name] || ['', ''])[1];
+      const sm = document.createElement('small'); sm.textContent = p.sub || (PROG[p.name] || ['', ''])[1];
       lab.append(inp, ic, tx, sm); progsEl.appendChild(lab);
     });
     renderBranches();
@@ -85,7 +90,7 @@
     $('#branchWrap').hidden = !(p && p.branches);
     coursesEl.innerHTML = '';
     if (p && p.branches) {
-      $('#branchTitle').textContent = `Choose your ${p.name} branch`;
+      $('#branchTitle').textContent = /Tech/.test(p.name) ? `Choose your ${p.name} branch` : `Choose your ${p.name} specialisation`;
       p.branches.forEach((name, i) => {
         const lab = document.createElement('label');
         lab.className = 'course'; lab.style.animationDelay = `${i * 30}ms`;
@@ -113,7 +118,7 @@
     // keep the branch when switching B.Tech ↔ M.Tech
     const twin = { 'B.Tech': 'M.Tech', 'M.Tech': 'B.Tech' }[sel.programme];
     sel.programme = twin || null;
-    if (!twin) sel.branch = null;
+    if (!twin || !(progOf() && progOf().branches && progOf().branches.includes(sel.branch))) sel.branch = null;
     renderProgs();
   }
   seg.addEventListener('click', (e) => { const b = e.target.closest('.seg-btn'); if (b && b.dataset.level !== level) setLevel(b.dataset.level); });

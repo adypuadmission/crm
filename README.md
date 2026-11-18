@@ -204,3 +204,31 @@ Indian SMS rules (TRAI DLT) require a registered **sender ID** and **approved te
 - **Duplicates:** the same mobile and course within 24 hours returns the existing reference number.
 
 To change the admin password, update `ADMIN_PASSWORD` and restart, or run `npm run hash-password -- "NewPassword"` and set `ADMIN_PASSWORD_HASH`.
+
+## CRM 3.0 — admissions, hierarchy, duplicates, AI caller
+
+**Programmes & fees** — `courses.js` holds every programme and tuition fee from the ADYPU *Fee Structure AY 2026-27*. The enquiry form, filters, uploads, chatbot fee answers, QR poster and the admission form all read from it. Edit fees there only.
+
+**Student panel (📂)** — click any student name (admin, counsellor or caller) to open the timeline, WhatsApp templates (opens the user's own WhatsApp), email templates, notes, the admission form and payments, and duplicate entries.
+
+**Duplicates** — the same mobile number or email is detected on the website form, single add and bulk upload (any programme). Counsellors see who already has the student. Admin: Follow-ups → "👯 Duplicate entries", then merge them in the student panel.
+
+**Data source & location** — counsellors can type an optional source (e.g. "Seminar – Fergusson") and location before adding or uploading. The admin filters, exports and summarises by data source.
+
+**Hierarchy** — counsellors create caller accounts in their own team ("My calling team"), assign or share their students among them, and see their callers' progress. The admin can also create callers inside a counsellor's team.
+
+**Admission form + fee payment** — from the student panel, anyone responsible for the student creates a *Provisional* or *Permanent* admission form link (`/apply/<token>`). The student fills the full application (same sections as the printed SOE form), uploads documents (stored encrypted) and pays:
+- online (Razorpay: card / UPI / net banking — set `RAZORPAY_KEY_ID` + `RAZORPAY_KEY_SECRET`),
+- UPI QR,
+- bank transfer,
+- or at the campus.
+
+Admin → 🎓 Admissions verifies payments, records counter payments, downloads the application PDF and receipts, and sets the fees and payment details.
+
+**Student email** — update the Google Apps Script mailer to version 2 (`google-apps-script/alert-mailer.gs`) and set the same secret in `MAIL_WEBHOOK_SECRET` on Render.
+
+**AI caller** — assign students to "🤖 AI Caller" like any caller. When it is switched on (Team & AI tab) and connected, it calls students in calling hours. It then logs the outcome, summary and next follow-up, and hands interested students to a chosen human caller. Connect it with:
+- Vapi: `VAPI_API_KEY`, `VAPI_ASSISTANT_ID`, `VAPI_PHONE_NUMBER_ID`, plus the assistant's Server URL shown in the dashboard;
+- or any provider: `AI_CALLER_WEBHOOK_URL`, which receives `{call_ref, student, callback_url, secret}` and posts results back to `/api/ai-caller/callback`.
+
+Optional: `AI_CALLER_SECRET`.

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Admission Form | Ajeenkya DY Patil University, Pune</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/apply.css">
+</head>
+<body>
+<header class="ah">
+  <div class="ah-in"><span class="crest">🎓</span><div><b>Ajeenkya DY Patil University, Pune</b><small id="hSub">Online admission form</small></div></div>
+</header>
+<main class="aw" id="app">
+  <section class="hero" id="hero" hidden>
+    <div><h1 id="hi">Welcome!</h1><p id="hiSub" class="muted"></p></div>
+    <div class="hero-fee" id="heroFee"></div>
+  </section>
+  <nav class="steps" id="steps" hidden></nav>
+  <form class="card" id="form" novalidate autocomplete="on" hidden>
+    <div id="secs"></div>
+    <div class="nav">
+      <button class="btn ghost" type="button" id="prev">← Back</button>
+      <span class="saved" id="saved"></span>
+      <button class="btn primary" type="button" id="next">Save &amp; continue →</button>
+    </div>
+  </form>
+  <section class="card" id="done" hidden></section>
+  <section class="card" id="pay" hidden></section>
+  <section class="card err" id="err" hidden></section>
+  <p class="foot muted small" id="foot">Your details are sent securely and stored encrypted. Only the ADYPU admission office can see them.</p>
+</main>
+<div class="toast" id="toast"></div>
+<script src="/apply.js"></script>
+</body>
+</html>

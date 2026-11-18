@@ -461,3 +461,91 @@ tr.picked td{background:#fff7ed!important}
 .tform .kind-pick b{font-size:13.5px}
 .wrap,.tabpane{grid-template-columns:minmax(0,1fr)}
 .table-wrap{overflow-x:auto}
+
+/* ===== CRM 3.0: student panel, leads, duplicates, admissions, AI caller, hierarchy ===== */
+.s-form{background:#fef3c7;color:#92400e}
+.openp{border:0;background:none;padding:0;font:inherit;font-weight:700;color:var(--navy);cursor:pointer;text-align:left}
+.openp:hover{color:#c2410c;text-decoration:underline}.openp .op{font-size:12px;opacity:.6}
+.chips-s{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+.lead{font-size:11px;font-weight:700;border-radius:99px;padding:1px 8px;white-space:nowrap}
+.lead.hot{background:#fee2e2;color:#b91c1c}.lead.warm{background:#fef3c7;color:#92400e}.lead.cold{background:#e0f2fe;color:#075985}.lead.adm{background:#dcfce7;color:#166534}
+.dupb{font-size:11px;font-weight:700;border-radius:99px;padding:1px 8px;background:#fae8ff;color:#86198f}
+.appb{font-size:11px;font-weight:700;border-radius:99px;padding:1px 8px;background:#ede9fe;color:#5b21b6}
+.dsrc{font-size:11px;color:#475569;background:#f1f5f9;border-radius:6px;padding:1px 6px;display:inline-block;margin-top:3px}
+.sp-box{width:min(1000px,100%)}
+.sp-head{display:flex;gap:10px;align-items:flex-start}.sp-name{font-size:18px;color:var(--navy)}.sp-head .small{margin-top:3px;line-height:1.5}
+.sp-body{gap:14px}
+.sp-actions{display:flex;gap:8px;flex-wrap:wrap}
+.sp-pane{border:1px solid #fde7d2;background:#fffbf5;border-radius:14px;padding:12px 14px;display:grid;gap:10px}
+.sp-pane[hidden]{display:none}
+.sp-row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.tpl{display:flex;gap:6px;flex-wrap:wrap}
+.tpl button{border:1.5px solid var(--line);background:#fff;border-radius:99px;padding:5px 11px;font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;color:var(--navy)}
+.tpl button.on{background:var(--navy);color:#fff;border-color:var(--navy)}
+.lab[hidden]{display:none}
+.sp-type{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sp-type label{display:flex;gap:10px;align-items:flex-start;border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff;cursor:pointer}
+.sp-type label:has(input:checked){border-color:var(--orange);background:#fff7ed}
+.sp-type input{accent-color:var(--orange);margin-top:3px}.sp-type small{display:block;color:#64748b;font-weight:400}
+.sp-apps{display:grid;gap:8px}
+.appc{border:1px solid #e2e8f0;border-left:4px solid #94a3b8;border-radius:12px;padding:10px 12px;display:grid;gap:6px;background:#fff}
+.appc.sub,.appc.pend{border-left-color:#f59e0b}.appc.paid{border-left-color:#16a34a}.appc.open,.appc.sent{border-left-color:#6366f1}.appc.can{opacity:.6}
+.appc-b{display:flex;gap:12px;flex-wrap:wrap;align-items:center;font-size:13px}.appc-b .ok{color:#15803d}.appc-b .due{color:#b91c1c}
+.appc-l{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.appc-l input{flex:1;min-width:200px;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;color:#475569}
+.appst{font-size:11.5px;font-weight:700;border-radius:99px;padding:2px 9px;background:#f1f5f9;color:#475569;white-space:nowrap}
+.appst.sent,.appst.open{background:#e0e7ff;color:#3730a3}.appst.sub,.appst.pend{background:#fef3c7;color:#92400e}.appst.paid{background:#dcfce7;color:#166534}.appst.can{background:#f1f5f9;color:#94a3b8}
+.payc{font-size:12px;border-radius:8px;padding:2px 8px;background:#f0fdf4;color:#166534}.payc.pend{background:#fffbeb;color:#92400e}.payc.bad{background:#fef2f2;color:#991b1b}
+.dupbox{background:#fdf4ff;border:1px solid #f0abfc;border-radius:12px;padding:10px 12px;font-size:13px}
+.dupbox ul{margin:6px 0 0;padding-left:18px;display:grid;gap:5px}.dupbox li.me{font-weight:700}
+.tag1{font-size:11px;background:#86198f;color:#fff;border-radius:99px;padding:1px 7px}
+.tl{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:2px;max-height:340px;overflow:auto}
+.tl li{display:flex;gap:10px;padding:7px 4px;border-bottom:1px dashed #edf0f6;font-size:13.5px}
+.tl-i{width:28px;height:28px;flex:none;border-radius:9px;background:#f1f5f9;display:grid;place-items:center}
+/* admissions tab */
+.adm-kpis{grid-template-columns:repeat(6,1fr)}
+@media(max-width:1200px){.adm-kpis{grid-template-columns:repeat(3,1fr)}}
+.adm-table td{vertical-align:top}
+.payrow{font-size:12.5px;border-radius:8px;padding:4px 8px;margin-bottom:4px;background:#f0fdf4}.payrow.pend{background:#fffbeb}.payrow.bad{background:#fef2f2}
+.vbtns{display:inline-flex;gap:4px;margin-left:4px}
+.appv{border:1px solid #edf0f6;border-radius:12px;padding:10px 12px}.appv b{color:#9a3412;font-size:13px}
+.appv dl{display:grid;grid-template-columns:repeat(2,minmax(140px,.6fr) minmax(160px,1fr));gap:4px 12px;margin:8px 0 0;font-size:13px}
+.appv dt{color:#64748b}.appv dd{margin:0;font-weight:600}
+@media(max-width:800px){.appv dl{grid-template-columns:minmax(120px,.6fr) 1fr}}
+.appv-files{display:flex;gap:6px;flex-wrap:wrap}
+details.fees{margin-top:12px}details.fees summary{cursor:pointer;padding:6px 0}
+.copyrow{display:flex;gap:6px;margin:4px 0}.copyrow input{flex:1;font:inherit;font-size:12px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
+/* AI caller */
+.ai-card{margin-top:16px}
+.ai-grid{display:grid;grid-template-columns:1fr 1fr 1.1fr;gap:14px}
+@media(max-width:1200px){.ai-grid{grid-template-columns:1fr}}
+.ai-box{display:grid;gap:10px;align-content:start;border:1px solid #edf0f6;border-radius:14px;padding:12px}
+.ai-state{font-size:12px;font-weight:700;background:#f1f5f9;color:#475569;border-radius:99px;padding:4px 10px}.ai-state.on{background:#dcfce7;color:#166534}
+.ai-kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.ai-kpis div{background:#f8fafc;border-radius:10px;padding:8px;text-align:center}.ai-kpis b{display:block;font-size:20px;color:var(--navy)}.ai-kpis small{font-size:11.5px;color:#64748b}
+.ai-recent{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:260px;overflow:auto;font-size:13px}
+.ai-recent p{margin:2px 0 0;color:#475569;font-size:12.5px}
+.ai-setup ol{padding-left:18px;margin:6px 0;display:grid;gap:6px}
+.ai-prompt{width:100%;font:12px/1.5 ui-monospace,monospace;border:1px solid var(--line);border-radius:8px;padding:8px;margin:6px 0}
+.mini{display:inline-flex;gap:6px;align-items:center;font-size:12.5px;font-weight:600;color:#475569}
+/* hierarchy */
+.mem.child{margin-left:34px;border-left:4px solid #a7f3d0}
+.mem-grp{font-weight:700;color:#047857;margin:10px 0 2px;font-size:13px}
+.kind.parent{background:#f0fdf4;color:#047857}.kind.ai{background:#f5f3ff;color:#6d28d9}
+#parentWrap[hidden]{display:none}
+/* counsellor workspace extras */
+.myteam{margin-top:16px}
+.myteam-grid{display:grid;grid-template-columns:minmax(260px,.8fr) 2fr;gap:14px}
+@media(max-width:1000px){.myteam-grid{grid-template-columns:1fr}}
+.assign-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#fff7ed;border:1px solid #fde7d2;border-radius:12px;padding:8px 10px;margin:8px 0}
+.assign-bar[hidden]{display:none}
+.src-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.src-row label{display:grid;gap:4px;font-size:12.5px;font-weight:600;color:#334155}.src-row input{font:inherit;padding:8px 10px;border:1.5px solid var(--line);border-radius:10px}
+.cc-open{border:0;background:none;padding:0;font:inherit;font-weight:700;color:var(--navy);cursor:pointer}
+.tabs .tab{white-space:nowrap}
+.cmdbar[hidden]{display:none}
+.sp-head .small b{font-size:inherit}
+.ch-actions input[type=search]{font:inherit;font-size:13px;padding:7px 10px;border:1.5px solid var(--line);border-radius:9px;min-width:200px}
+#myCallers{align-content:start}
+@media(max-width:1500px){.tabs .tab{padding-left:10px;padding-right:10px;font-size:13px}}
+.sms-pill,.admin-chip{white-space:nowrap}
+@media(max-width:1700px){.sms-pill{display:none}}

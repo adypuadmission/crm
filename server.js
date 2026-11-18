@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 3000;
 const ACADEMIC_YEAR = process.env.ACADEMIC_YEAR || '2027–28';
 const ADMIN_USER = process.env.ADMIN_USERNAME || 'admin';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const STATUSES = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Applied', 'Admitted', 'Not Interested'];
+const STATUSES = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Form Sent', 'Applied', 'Admitted', 'Not Interested'];
 const CALL_OUTCOMES = ['Connected', 'Not picked', 'Busy', 'Switched off', 'Not reachable', 'Wrong number', 'Call back later'];
 const istToday = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 const validDate = (d) => (d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null);
@@ -74,7 +74,7 @@ const MAIL_WEBHOOK_URL = process.env.MAIL_WEBHOOK_URL || '';
 if (MAIL_WEBHOOK_URL) {
   mailer = { sendMail: async (m) => {
     const r = await fetch(MAIL_WEBHOOK_URL, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', to: m.to, subject: m.subject, text: m.text, html: m.html }) });
+      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', to: m.to, subject: m.subject, text: m.text, html: m.html, name: m.name, replyTo: m.replyTo }) });
     const body = await r.text();
     if (!r.ok || !/^ok/.test(body.trim())) throw new Error(`mail relay replied ${r.status}: ${body.replace(/<[^>]+>/g, ' ').trim().slice(0, 100)}`);
   } };
@@ -94,9 +94,10 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-      imgSrc: ["'self'", 'data:'],
-      scriptSrc: ["'self'"],
-      connectSrc: ["'self'"],
+      imgSrc: ["'self'", 'data:', 'blob:'],
+      scriptSrc: ["'self'", 'https://checkout.razorpay.com'], // Razorpay only loads on the fee-payment page, when online payment is set up
+      frameSrc: ['https://api.razorpay.com', 'https://checkout.razorpay.com'],
+      connectSrc: ["'self'", 'https://lumberjack.razorpay.com'],
       formAction: ["'self'"],
       frameAncestors: ["'none'"],
     },
@@ -186,7 +187,9 @@ async function requireSub(req, res, next) {
   const u = await db.getUserAuth(t.u);
   if (!u || u.id !== t.id || !Number(u.active)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
   if (t.pv && t.pv !== passVer(u.pass_hash)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your password was changed. Please log in again.'); }
-  req.user = { role: 'sub', id: u.id, name: u.name, username: u.username, kind: u.kind === 'caller' ? 'caller' : 'counsellor' };
+  req.user = { role: 'sub', id: u.id, name: u.name, username: u.username, kind: u.kind === 'caller' ? 'caller' : 'counsellor', parent_id: u.parent_id || null };
+  // a counsellor also looks after the students given to the callers in their own team
+  if (req.user.kind === 'counsellor') req.user.team = (await db.all("SELECT id FROM users WHERE parent_id = $1 AND kind = 'caller'", [u.id])).map((x) => x.id);
   // Unusual volume of requests (possible scraping) → alert
   const k = `rate:${u.id}`, now = Date.now(), w = (activity.get(k) || []).filter((x) => now - x < 10 * 60 * 1000);
   w.push(now); activity.set(k, w);
@@ -208,14 +211,14 @@ function validateEnquiry(body) {
   mobile = mobile.replace(/^(\+91|0091|91(?=\d{10}$)|0(?=\d{10}$))/, '');
   const email = clean(body.email, 120).toLowerCase();
   const level = clean(body.level, 4);
-  const programme = clean(body.programme, 30);
+  const programme = clean(body.programme, 60);
   const branch = clean(body.branch, 60);
   const city = clean(body.city, 60).replace(/[^A-Za-z\u0900-\u097F .'()-]/g, '');
 
   if (!/^[A-Za-zऀ-ॿ .'-]{2,80}$/.test(student_name)) errors.student_name = 'Please enter a valid full name.';
   if (!/^[6-9]\d{9}$/.test(mobile)) errors.mobile = 'Enter a valid 10-digit Indian mobile number.';
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) errors.email = 'Enter a valid email address.';
-  if (!isValid(level, programme, branch || '')) errors.course = branch || !/Tech/.test(programme) ? 'Please choose a programme.' : 'Please choose your branch.';
+  if (!isValid(level, programme, branch || '')) errors.course = branch || !programme ? 'Please choose a programme.' : 'Please choose your branch / specialisation.';
   if (city.length < 2) errors.city = 'Please enter your city or district.';
   if (!body.consent) errors.consent = 'Please accept to be contacted.';
   const { region } = resolveRegion(city);
@@ -280,12 +283,8 @@ app.get('/qr-poster.pdf', async (req, res) => {
   y += 12;
   const head = (x, t) => doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(12).text(t, x, y);
   const list = (x, items, w, size = 10.5) => doc.fillColor('#334155').font('Helvetica').fontSize(size).text(items.join('\n'), x, y + 18, { width: w, lineGap: 2.5 });
-  head(50, 'UG'); list(50, LEVELS.UG.map((p) => p.name), 110);
-  head(165, 'PG'); list(165, LEVELS.PG.map((p) => p.name), 80);
-  const br = (LEVELS.UG.find((p) => p.branches) || { branches: [] }).branches.map((b) => b.replace(/^Computer Science & Engineering$/, 'Computer Science & Engg.').replace(/^Electronics & Computer Engineering$/, 'Electronics & Computer Engg.'));
-  head(255, 'B.Tech / M.Tech branches');
-  const half = Math.ceil(br.length / 2);
-  list(255, br.slice(0, half), 150, 9.8); list(410, br.slice(half), 150, 9.8);
+  head(50, 'Undergraduate (UG)'); list(50, LEVELS.UG.map((p) => p.name + (p.branches ? `  (${p.branches.length})` : '')), 250, 10);
+  head(310, 'Postgraduate (PG)'); list(310, LEVELS.PG.map((p) => p.name + (p.branches ? `  (${p.branches.length})` : '')), 240, 10);
   doc.rect(0, H - 92, W, 92).fill(NAVY);
   doc.rect(0, H - 96, W, 4).fill(ORANGE);
   doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(11).text('For further connection & queries', 0, H - 78, { width: W, align: 'center' });
@@ -401,6 +400,7 @@ app.post('/api/enquiry', submitLimiter, async (req, res) => {
       ? { source: 'qr-ref', created_by_id: refUser.id, created_by_name: refUser.name, counsellor_id: refUser.id, counsellor_name: refUser.name }
       : { source: req.body.src === 'qr' ? 'qr' : 'web' };
     let row = await db.insertEnquiry({ ...data, ...attribution, mobile_verified: verified });
+    db.addEvent(row.id, attribution.created_by_name || 'Student', 'created', `Enquiry submitted (${attribution.source === 'qr-ref' ? 'counsellor QR' : attribution.source === 'qr' ? 'QR scan' : 'website'})${row.dup_of ? ' · same student already enquired before' : ''}`).catch(() => {});
     if (!row.caller_id) { const u = await autoAssign(row); if (u) { await db.assignMany([row.id], u); row = await db.getEnquiry(row.id); } }
     sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
     res.json({ ok: true, ref_no: row.ref_no, name: row.student_name, smsSent: await studentMsgs(), counsellor: await counsellorOf(row) });
@@ -463,7 +463,7 @@ app.post('/api/admin/login', loginLimiter, requireXhr, async (req, res) => {
   }
   const u = await db.getUserAuth(uname);
   const ok = await bcrypt.compare(String(password || ''), u ? u.pass_hash : ADMIN_HASH); // compare anyway: same timing
-  if (!u || !ok) return failed();
+  if (!u || !ok || u.kind === 'ai') return failed();
   if (!Number(u.active)) { audit(req, 'disabled_account_login', uname, 'medium', { username: uname, id: u.id, role: 'sub' }); return res.status(403).json({ error: 'This account is disabled. Please contact the admin.' }); }
   fails.delete(key);
   await db.touchLogin(u.id);
@@ -516,25 +516,29 @@ app.get('/team', requireSub, (_req, res) => sendView(res, 'team.html'));
 app.get('/team/team.js', requireSub, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'team.js')));
 
 // ---------- sub-admin (team) API ----------
-const teamRow = (row, me) => row && (me.kind === 'caller' ? row.caller_id === me.id : (row.created_by_id === me.id || row.counsellor_id === me.id));
+const teamRow = (row, me) => !!row && (me.kind === 'caller' ? row.caller_id === me.id : (row.created_by_id === me.id || row.counsellor_id === me.id || (!!row.caller_id && (me.team || []).includes(row.caller_id))));
 // Sub-admins never receive full contact details — only masked values.
 const masked = (r) => r && ({ ...r, mobile: sec.maskMobile(r.mobile), email: r.email ? sec.maskEmail(r.email) : '', mobile_masked: true });
 function teamData(body) {
   const { errors, data } = validateEnquiry({ ...body, consent: true });
   const status = STATUSES.includes(body.status) ? body.status : 'New';
-  return { errors, data: { ...data, status, notes: String(body.notes || '').slice(0, 500) } };
+  return { errors, data: { ...data, status, notes: String(body.notes || '').slice(0, 500), data_source: clean(body.data_source, 80) || null, data_location: clean(body.data_location, 80) || null } };
 }
+const dupMessage = (d) => `Already registered as ${d.ref_no}${d.counsellor_name ? ' with ' + d.counsellor_name : d.created_by_name ? ' by ' + d.created_by_name : ' (website / QR)'} on ${new Date(d.created_at).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' })}`;
 async function pushStudent(body, me, sendSms) {
+  if (!clean(body.city, 60) && body.data_location) body = { ...body, city: String(body.data_location).split(',')[0] };
   const { errors, data } = teamData(body);
   if (Object.keys(errors).length) return { errors };
-  const existing = await db.findExisting(data.mobile, data.course);
+  // Duplicate check: same mobile number OR same email, for any programme
+  const existing = await db.findSameStudent(data.mobile, data.email);
   if (existing) return { duplicate: existing };
   const row = await db.insertEnquiry({ ...data, source: 'subadmin', created_by_id: me.id, created_by_name: me.name, counsellor_id: me.id, counsellor_name: me.name });
+  db.addEvent(row.id, me.name, 'created', `Added by ${me.name}${data.data_source ? ' · source: ' + data.data_source : ''}${data.data_location ? ' · ' + data.data_location : ''}`).catch(() => {});
   if (sendSms) await sendConfirmation(row).catch((e) => console.error('confirmation SMS', e.message));
   return { row };
 }
-const teamFilters = (q, me) => ({ follow: q.follow, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir,
-  ...(me.kind === 'caller' ? { scopeCaller: me.id } : { scopeUser: me.id }) });
+const teamFilters = (q, me) => ({ dataSource: q.dataSource, appStatus: q.appStatus, caller: q.caller, follow: q.follow, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, from: q.from, to: q.to, sort: q.sort, dir: q.dir,
+  ...(me.kind === 'caller' ? { scopeCaller: me.id } : { scopeUser: me.id, scopeCallers: me.team || [] }) });
 
 app.get('/api/team/me', requireSub, async (req, res) => res.json({ kind: req.user.kind, outcomes: CALL_OUTCOMES, assignedCalling: await db.getSetting('assigned_calling', true), user: req.user, statuses: STATUSES, levels: LEVELS, cities: CITY_SUGGESTIONS, smsProvider: sms.provider, studentMsgs: await studentMsgs() }));
 app.get('/api/team/enquiries', requireSub, async (req, res) => {
@@ -582,11 +586,12 @@ app.post('/api/team/enquiries/:id/calls', requireSub, requireXhr, async (req, re
   const upd = { next_action_date: next };
   if (b.status && b.status !== row.status) upd.status = b.status;
   const out = await db.updateEnquiry(row.id, upd);
+  db.addEvent(row.id, req.user.name, 'call', `${b.channel === 'whatsapp' ? 'WhatsApp' : 'Call'}: ${b.outcome}${b.status && b.status !== row.status ? ' · status → ' + b.status : ''}`).catch(() => {});
   audit(req, 'call_logged', `${row.ref_no}: ${b.outcome}${b.status ? ' → ' + b.status : ''}`, 'info');
   res.json({ ok: true, row: masked(out) });
 });
 async function followCounts(me) {
-  const scope = me && me.id, base = !me ? {} : me.kind === 'caller' ? { scopeCaller: me.id } : { scopeUser: me.id };
+  const scope = me && me.id, base = !me ? {} : me.kind === 'caller' ? { scopeCaller: me.id } : { scopeUser: me.id, scopeCallers: me.team || [] };
   const [today, overdue, untouched, all] = await Promise.all(['today', 'overdue', 'untouched', undefined].map((follow) => db.listEnquiries({ ...base, follow })));
   return { today: today.length, overdue: overdue.length, untouched: untouched.length, all: all.length, assigned: scope ? all.filter((r) => r.caller_id === scope).length : undefined };
 }
@@ -597,7 +602,7 @@ app.post('/api/team/enquiries', requireSub, requireXhr, async (req, res) => {
   try {
     const r = await pushStudent(req.body, req.user, req.body.sendSms !== false);
     if (r.errors) return res.status(400).json({ error: 'Please check the highlighted fields.', fields: r.errors });
-    if (r.duplicate) return res.status(409).json({ error: `This student is already registered (${r.duplicate.ref_no}). Please contact the admin if you need it assigned to you.` });
+    if (r.duplicate) { audit(req, 'duplicate_blocked', r.duplicate.ref_no, 'info'); return res.status(409).json({ error: `Duplicate: ${dupMessage(r.duplicate)}. Please contact the admin if it should be with you.` }); }
     audit(req, 'student_added', r.row.ref_no, 'info');
     res.json({ ok: true, row: masked(await db.getEnquiry(r.row.id)) });
   } catch (e) { console.error(e); res.status(500).json({ error: 'Something went wrong. Please try again.' }); }
@@ -608,12 +613,13 @@ app.patch('/api/team/enquiries/:id', requireSub, requireXhr, async (req, res) =>
   const upd = {};
   if (req.body.status !== undefined) { if (!STATUSES.includes(req.body.status)) return res.status(400).json({ error: 'Invalid status' }); upd.status = req.body.status; }
   if (req.body.notes !== undefined) upd.notes = String(req.body.notes).slice(0, 500);
+  if (upd.status && upd.status !== row.status) db.addEvent(row.id, req.user.name, 'status', `Status ${row.status} → ${upd.status}`).catch(() => {});
   res.json({ row: masked(await db.updateEnquiry(row.id, upd)) });
 });
 
 // Bulk upload: .xlsx or .csv, first row = headers. Columns are matched by name, in any order.
 const HEAD = { student_name: /^(student )?name|full ?name/, mobile: /mobile|phone|contact/, email: /e-?mail/, city: /city|district/, level: /^level|ug ?\/ ?pg/,
-  programme: /programme|program|course/, branch: /branch|specialis|specializ/, status: /status/, notes: /note|remark/ };
+  programme: /programme|program|course/, branch: /branch|specialis|specializ/, status: /status/, notes: /note|remark/, data_source: /^source|data source|lead source/, data_location: /^location|venue|place/ };
 function parseCsv(text) {
   const rows = []; let row = [], cell = '', q = false;
   for (let i = 0; i < text.length; i++) {
@@ -649,6 +655,7 @@ app.post('/api/team/import', requireSub, requireXhr, importLimiter, express.raw(
     const body = grid.slice(hi + 1).filter((r) => r.some((c) => String(c).trim()));
     if (body.length > 1000) return res.status(400).json({ error: 'Please upload at most 1000 students at a time.' });
     const sendSms = req.query.sms === '1';
+    const batchSource = clean(req.query.source, 80), batchLocation = clean(req.query.location, 80);
     const result = { added: [], duplicates: [], errors: [] };
     for (let i = 0; i < body.length; i++) {
       const r = body[i], g = (k) => (col[k] >= 0 ? String(r[col[k]] ?? '').trim() : '');
@@ -659,27 +666,28 @@ app.post('/api/team/import', requireSub, requireXhr, importLimiter, express.raw(
       if (pm) { programme = pm[1].name; if (!level) level = pm[0]; }
       if (pm && pm[1].branches && branch) { const bm = pm[1].branches.find((b) => b.toLowerCase().startsWith(branch.toLowerCase().replace(/ engineering$/, '')) || b.toLowerCase() === branch.toLowerCase()); if (bm) branch = bm; }
       const st = STATUSES.find((s) => s.toLowerCase() === g('status').toLowerCase());
-      const out = await pushStudent({ student_name: g('student_name'), mobile: g('mobile'), email: g('email'), city: g('city'), level, programme, branch, status: st || 'New', notes: g('notes') }, req.user, sendSms);
+      const out = await pushStudent({ student_name: g('student_name'), mobile: g('mobile'), email: g('email'), city: g('city'), level, programme, branch, status: st || 'New', notes: g('notes'),
+        data_source: g('data_source') || batchSource, data_location: g('data_location') || batchLocation }, req.user, sendSms);
       const line = hi + i + 2;
       if (out.errors) result.errors.push({ line, name: g('student_name'), problems: Object.values(out.errors) });
-      else if (out.duplicate) result.duplicates.push({ line, name: g('student_name'), ref: out.duplicate.ref_no });
+      else if (out.duplicate) result.duplicates.push({ line, name: g('student_name'), ref: out.duplicate.ref_no, owner: dupMessage(out.duplicate) });
       else result.added.push({ line, name: out.row.student_name, ref: out.row.ref_no });
     }
-    audit(req, 'bulk_upload', `${name}: ${result.added.length} added, ${result.duplicates.length} duplicates, ${result.errors.length} errors`, 'info');
+    audit(req, 'bulk_upload', `${name}${batchSource ? ' [' + batchSource + ']' : ''}: ${result.added.length} added, ${result.duplicates.length} duplicates, ${result.errors.length} errors`, 'info');
     res.json({ ok: true, total: body.length, ...result });
   } catch (e) { console.error(e); res.status(400).json({ error: 'Could not read that file. Please use the template.' }); }
 });
 app.get('/api/team/template.xlsx', requireSub, async (_req, res) => {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Students');
-  ws.columns = [['Student Name', 26], ['Mobile', 14], ['Email', 28], ['City', 16], ['Level', 8], ['Programme', 16], ['Branch', 34], ['Status', 18], ['Notes', 30]].map(([header, width]) => ({ header, width }));
+  ws.columns = [['Student Name', 26], ['Mobile', 14], ['Email', 28], ['City', 16], ['Level', 8], ['Programme', 16], ['Branch', 34], ['Status', 18], ['Notes', 30], ['Source', 24], ['Location', 22]].map(([header, width]) => ({ header, width }));
   ws.getRow(1).eachCell((c) => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } }; });
   // Examples live on their own sheet so they are never uploaded by mistake (only the first sheet is read).
   const ex = wb.addWorksheet('Example');
   ex.columns = ws.columns.map((c) => ({ header: c.header, width: c.width }));
   ex.getRow(1).font = { bold: true };
-  ex.addRow(['Aarya Patil', '9876543210', 'aarya@example.com', 'Pune', 'UG', 'B.Tech', 'Mechanical Engineering', 'New', 'Met at school fair']);
-  ex.addRow(['Rohan Deshmukh', '8123456789', '', 'Nashik', 'PG', 'MBA', '', 'Contacted', 'Branch is only needed for B.Tech / M.Tech']);
+  ex.addRow(['Aarya Patil', '9876543210', 'aarya@example.com', 'Pune', 'UG', 'B.Tech', 'Mechanical Engineering', 'New', 'Met at school fair', 'School fair - Modern College', 'Shivajinagar, Pune']);
+  ex.addRow(['Rohan Deshmukh', '8123456789', '', 'Nashik', 'PG', 'MBA', '', 'Contacted', 'Branch is only needed for B.Tech / M.Tech', '', '']);
   const lists = wb.addWorksheet('Lists');
   const progs = [...LEVELS.UG.map((p) => p.name), ...LEVELS.PG.map((p) => p.name)];
   const branches = (LEVELS.UG.find((p) => p.branches) || { branches: [] }).branches;
@@ -751,7 +759,9 @@ app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (await db.getUserAuth(username)) return res.status(409).json({ error: 'That username is already taken.' });
   const kind = req.body.kind === 'caller' ? 'caller' : 'counsellor';
-  const user = await db.createUser({ name, username, mobile, kind, pass_hash: await bcrypt.hash(password, 12) });
+  let parent_id = null;
+  if (kind === 'caller' && req.body.parent_id) { const p = await db.getUser(parseInt(req.body.parent_id, 10)); if (p && p.kind === 'counsellor') parent_id = p.id; }
+  const user = await db.createUser({ name, username, mobile, kind, parent_id, pass_hash: await bcrypt.hash(password, 12) });
   audit(req, 'sub_admin_created', `${name} (@${username}) · ${kind === 'caller' ? 'calling team' : 'counsellor (data entry)'}`, 'info');
   res.json({ ok: true, user, password });
 });
@@ -762,18 +772,20 @@ app.patch('/api/admin/users/:id', requireAdmin, requireXhr, async (req, res) => 
   if (req.body.name !== undefined) upd.name = clean(req.body.name, 60);
   if (req.body.mobile !== undefined) upd.mobile = String(req.body.mobile).replace(/\D/g, '').slice(-10);
   if (req.body.active !== undefined) upd.active = !!req.body.active;
+  if (req.body.parent_id !== undefined) upd.parent_id = req.body.parent_id ? parseInt(req.body.parent_id, 10) : null;
   if (req.body.resetPassword) { password = genPassword(); upd.pass_hash = await bcrypt.hash(password, 12); audit(req, 'password_reset', `user #${id} (old sessions signed out)`, 'info'); }
   if (req.body.active !== undefined) audit(req, req.body.active ? 'account_enabled' : 'account_disabled', `user #${id}`, 'info');
   res.json({ ok: true, user: await db.updateUser(id, upd), password });
 });
 
 // ---------- admin API ----------
-const pickFilters = (q) => ({ caller: q.caller, follow: q.follow, pushedBy: q.pushedBy, counsellor: q.counsellor, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, region: q.region, verified: q.verified, from: q.from, to: q.to, sort: q.sort, dir: q.dir });
+const pickFilters = (q) => ({ dataSource: q.dataSource, appStatus: q.appStatus, caller: q.caller, follow: q.follow, pushedBy: q.pushedBy, counsellor: q.counsellor, q: q.q, level: q.level, programme: q.programme, branch: q.branch, status: q.status, region: q.region, verified: q.verified, from: q.from, to: q.to, sort: q.sort, dir: q.dir });
 
 app.get('/api/admin/enquiries', requireAdmin, async (req, res) => {
   const rows = await db.listEnquiries(pickFilters(req.query));
-  const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active, kind: u.kind }));
-  res.json({ rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team, unseenAlerts: await db.countUnseenAlerts() });
+  const team = (await db.listUsers()).map((u) => ({ id: u.id, name: u.name, active: u.active, kind: u.kind, parent_id: u.parent_id }));
+  const sources = (await db.all("SELECT data_source AS s, COUNT(*) AS n FROM enquiries WHERE data_source IS NOT NULL AND data_source <> '' GROUP BY data_source ORDER BY n DESC LIMIT 200")).map((x) => ({ s: x.s, n: Number(x.n) }));
+  res.json({ sources, rows, statuses: STATUSES, levels: LEVELS, regions: REGIONS, smsProvider: sms.provider, team, unseenAlerts: await db.countUnseenAlerts() });
 });
 
 app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res) => {
@@ -790,6 +802,8 @@ app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res)
   }
   const before = await db.getEnquiry(id);
   const row = await db.updateEnquiry(id, upd);
+  if (before && upd.status && upd.status !== before.status) db.addEvent(id, ADMIN_NAME, 'status', `Status ${before.status} → ${upd.status}`).catch(() => {});
+  if (before && upd.counsellor_id !== undefined && before.counsellor_id !== upd.counsellor_id) db.addEvent(id, ADMIN_NAME, 'assign', upd.counsellor_name ? `Counsellor → ${upd.counsellor_name}` : 'Counsellor removed').catch(() => {});
   // newly assigned counsellor → tell the student whom to WhatsApp / call
   if (upd.counsellor_id && before && before.counsellor_id !== upd.counsellor_id) sendConfirmation(row).catch((e) => console.error('counsellor intro', e.message));
   res.json({ row });
@@ -803,6 +817,7 @@ app.post('/api/admin/assign', requireAdmin, requireXhr, async (req, res) => {
   let user = null;
   if (req.body.counsellor_id) { user = await db.getUser(parseInt(req.body.counsellor_id, 10)); if (!user || !Number(user.active)) return res.status(400).json({ error: 'Choose an active caller.' }); }
   const n = await db.assignMany(ids, user);
+  for (const id of ids) db.addEvent(id, ADMIN_NAME, 'assign', user ? `Calling → ${user.name}` : 'Caller removed').catch(() => {});
   audit(req, 'calls_assigned', `${n} students → ${user ? user.name : 'no caller'}`, 'info');
   res.json({ ok: true, assigned: n, to: user ? user.name : null });
 });
@@ -919,6 +934,11 @@ const EXPORT_FIELDS = [
   ['feedback', 'Latest Feedback', 34, 1.8, (r) => r._feedback || ''],
   ['next', 'Next Follow-up', 14, 0.8, (r) => fmtDay(r.next_action_date)],
   ['notes', 'Notes', 28, 1.4, (r) => r.notes || ''],
+  ['datasource', 'Data Source', 24, 1.2, (r) => r.data_source || ''],
+  ['location', 'Data Location', 20, 1.0, (r) => r.data_location || ''],
+  ['duplicate', 'Duplicate Of', 16, 0.9, (r) => (r.dup_of ? r._dupRef || 'Yes' : '')],
+  ['appstatus', 'Admission Form', 16, 0.9, (r) => r.app_status || ''],
+  ['admtype', 'Admission Type', 14, 0.8, (r) => r.admission_type || ''],
   ['created', 'Created On (IST)', 21, 1.0, (r) => fmtIST(r.created_at)],
   ['updated', 'Updated On (IST)', 21, 1.0, (r) => fmtIST(r.updated_at)],
 ];
@@ -929,6 +949,7 @@ const pickFields = (q) => {
   return list.length ? list : EXPORT_FIELDS.filter((f) => DEFAULT_FIELDS.includes(f[0]));
 };
 async function withFeedback(rows, fields) {
+  if (fields.some((f) => f[0] === 'duplicate')) { const ids = [...new Set(rows.filter((r) => r.dup_of).map((r) => r.dup_of))]; for (const id of ids) { const d = await db.getEnquiry(id); rows.filter((r) => r.dup_of === id).forEach((r) => { r._dupRef = d ? d.ref_no : 'merged'; }); } }
   if (fields.some((f) => f[0] === 'feedback')) { const m = await db.latestFeedback(rows.map((r) => r.id)); rows.forEach((r) => { r._feedback = m[r.id] || ''; }); }
   return rows;
 }
@@ -996,6 +1017,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   section('By counsellor', countBy(rows.map((r) => ({ k: r.counsellor_name || 'Unassigned' })), 'k'));
   section('By assigned caller', countBy(rows.map((r) => ({ k: r.caller_name || 'Not assigned' })), 'k'));
   section('By last call result', countBy(rows.map((r) => ({ k: r.last_call_outcome || 'Not called yet' })), 'k'));
+  section('By data source', countBy(rows.map((r) => ({ k: r.data_source || 'Not given' })), 'k'));
   section('By region', countBy(rows.map((r) => ({ ...r, region: r.region || 'Not given' })), 'region'));
   section('By date (IST)', countByDate(rows));
   section('Mobile verified', countBy(rows.map((r) => ({ v: r.mobile_verified ? 'Verified' : 'Not verified' })), 'v'));
@@ -1148,6 +1170,9 @@ setInterval(() => {
   const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
   if (h >= 9 && h < 21) sendDigest(false).catch((e) => console.error('digest', e.message));
 }, 10 * 60 * 1000);
+
+require('./plus')(app, { db, sec, audit, notifyAdmin, requireAdmin, requireSub, requireXhr, readToken, getMailer: () => mailer, ALERT_EMAIL_TO, ADMIN_NAME, ADMIN_USER, STATUSES,
+  CALL_OUTCOMES, LEVELS, ACADEMIC_YEAR, CONTACTS, PUBLIC_URL, IS_PROD, teamRow, masked, counsellorOf, istToday, clean, sendView, bcrypt, genPassword, sms, express, rateLimit, QRCode, PDFDocument, ExcelJS, dupMessage, validDate });
 
 app.get('/healthz', (_req, res) => res.send('ok'));
 app.use((_req, res) => res.redirect('/'));

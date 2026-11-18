@@ -85,6 +85,10 @@
           <label>Branch<select name="branch"></select></label>
         </div>
         <div class="tf-row">
+          <label>Source of data <small class="muted">(optional)</small><input name="data_source" maxlength="80" list="srcList" placeholder="e.g. School fair – Modern College"></label>
+          <label>Location <small class="muted">(optional)</small><input name="data_location" maxlength="80" placeholder="e.g. Shivajinagar, Pune"></label>
+        </div>
+        <div class="tf-row">
           <label>Status<select name="status"></select></label>
           <label>Notes<input name="notes" maxlength="500" placeholder="e.g. Met at school fair"></label>
         </div>
@@ -97,6 +101,11 @@
     <article class="card">
       <header class="ch"><div><b>📤 Bulk upload</b><small>Excel (.xlsx) or CSV, up to 1000 students per file.</small></div>
         <a class="mini" href="/api/team/template.xlsx" id="tplBtn">⬇ Template</a></header>
+      <div class="src-row">
+        <label>🏷 Source of this data <small class="muted">(optional)</small><input id="upSource" maxlength="80" list="srcList" placeholder="e.g. Seminar – Fergusson College"></label>
+        <label>📍 Location <small class="muted">(optional)</small><input id="upLocation" maxlength="80" placeholder="e.g. Nashik Road"></label>
+      </div>
+      <datalist id="srcList"></datalist>
       <label class="drop" id="drop">
         <input type="file" id="file" accept=".xlsx,.csv" hidden>
         <span class="drop-ic">📄</span>
@@ -107,9 +116,26 @@
       <label class="chk"><input type="checkbox" id="bulkSms"> Send confirmation SMS to every new student</label>
       <button class="btn primary wide" id="uploadBtn" disabled>Upload students</button>
       <div class="result" id="result" hidden></div>
-      <p class="cc-hint">Columns: Student Name, Mobile, Email, City, Level, Programme, Branch, Status, Notes. Students already in the database (same mobile + programme) are skipped.</p>
+      <p class="cc-hint">Columns: Student Name, Mobile, Email, City, Level, Programme, Branch, Status, Notes. Source and location are saved on every student in the file, so the admin can filter by them (a "Source" / "Location" column in the file overrides them). Students already in the database (same mobile number or email) are skipped and listed with who has them.</p>
     </article>
   </div>
+
+  <section class="card myteam" id="teamSec" hidden>
+    <header class="ch"><div><b>📞 My calling team</b><small>Create caller accounts under you and give them your students to call. They see only the students you assign, with masked numbers.</small></div></header>
+    <div class="myteam-grid">
+      <form id="callerForm" class="tform" novalidate autocomplete="off">
+        <b class="small">➕ New caller in my team</b>
+        <label>Full name *<input name="name" maxlength="60" placeholder="e.g. Kiran Jadhav"></label>
+        <label>Username *<input name="username" maxlength="30" placeholder="e.g. kiran.j"></label>
+        <label>Mobile *<input name="mobile" inputmode="numeric" maxlength="10"></label>
+        <label>Password<input name="password" maxlength="60" placeholder="leave empty to auto-generate"></label>
+        <button class="btn primary wide" type="submit">Create caller</button>
+        <p class="aerr" id="callerMsg" role="alert"></p>
+        <div class="pw-box" id="cpwBox" hidden></div>
+      </form>
+      <div class="members" id="myCallers"><p class="muted small">No callers yet.</p></div>
+    </div>
+  </section>
 
   <section class="panel" id="studentsSec">
     <div class="tbl-top">
@@ -121,16 +147,24 @@
         <label class="date">To <input type="date" id="to"></label>
       </div>
     </div>
+    <div class="assign-bar" id="assignBar" hidden>
+      <b class="small">📞 Calling: <span id="selN">0</span> selected</b>
+      <select id="asCaller"><option value="">Choose caller…</option></select>
+      <button class="btn primary xs" id="asGo" type="button">Assign selected</button>
+      <button class="btn ghost xs" id="asShare" type="button">Share selected among all my callers</button>
+      <button class="btn ghost xs" id="asNone" type="button">Remove caller</button>
+    </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>#</th><th>Ref. No.</th><th>Student</th><th>Contact</th><th>City</th><th>Programme</th><th>Status</th><th>Notes</th><th>Source</th><th>Added</th></tr></thead>
-        <tbody id="rows"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
+        <thead><tr><th><input type="checkbox" id="selAll" aria-label="Select all"></th><th>#</th><th>Ref. No.</th><th>Student</th><th>Contact</th><th>City</th><th>Programme</th><th>Status</th><th>Caller</th><th>Notes</th><th>Source</th><th>Added</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="12" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
   </section>
 </main>
 <div class="toast" id="toast"></div>
 <script src="/guard.js"></script>
+<script src="/panel.js"></script>
 <script src="/team/team.js"></script>
 </body>
 </html>

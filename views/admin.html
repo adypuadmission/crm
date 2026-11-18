@@ -13,7 +13,8 @@
   <nav class="tabs" role="tablist">
     <button class="tab on" data-tab="insights" role="tab" aria-selected="true">📊 Insights</button>
     <button class="tab" data-tab="table" role="tab" aria-selected="false">📋 Enquiries <span class="tab-count" id="tabCount">0</span></button>
-    <button class="tab" data-tab="team" role="tab" aria-selected="false">👥 Team</button>
+    <button class="tab" data-tab="admissions" role="tab" aria-selected="false">🎓 Admissions <span class="tab-count alert" id="verifyCount" hidden>0</span></button>
+    <button class="tab" data-tab="team" role="tab" aria-selected="false">👥 Team &amp; AI</button>
     <button class="tab" data-tab="security" role="tab" aria-selected="false">🛡️ Security <span class="tab-count alert" id="alertCount" hidden>0</span></button>
   </nav>
   <div class="tb-actions">
@@ -39,7 +40,9 @@
     <select id="pushedBy" aria-label="Pushed by"><option value="">All sources</option><option value="web">🌐 Website form</option></select>
     <select id="counsellor" aria-label="Counsellor"><option value="">All counsellors</option><option value="none">⚠ Unassigned</option></select>
     <select id="caller" aria-label="Caller"><option value="">All callers</option><option value="none">📵 No caller</option></select>
-    <select id="follow" aria-label="Follow-up"><option value="">All follow-ups</option><option value="untouched">🔴 Untouched (never called)</option><option value="overdue">⏰ Follow-up overdue</option><option value="today">📅 Follow-up due today</option><option value="upcoming">🗓 Upcoming follow-ups</option><option value="called">📞 Called at least once</option></select>
+    <select id="follow" aria-label="Follow-up"><option value="">All follow-ups</option><option value="untouched">🔴 Untouched (never called)</option><option value="overdue">⏰ Follow-up overdue</option><option value="today">📅 Follow-up due today</option><option value="upcoming">🗓 Upcoming follow-ups</option><option value="called">📞 Called at least once</option><option value="dups">👯 Duplicate entries</option></select>
+    <select id="dataSource" aria-label="Data source"><option value="">All data sources</option></select>
+    <select id="appStatus" aria-label="Admission form"><option value="">Admission form: any</option><option value="any">🎓 Form link created</option><option>Form sent</option><option>Form opened</option><option>Form submitted</option><option>Payment submitted</option><option>Fees paid</option><option>Part paid</option></select>
     <input id="q" type="search" placeholder="🔍 Name, mobile, city, ref…">
   </div>
   <div class="cmd-row">
@@ -133,7 +136,7 @@
           <option value="programme:asc">Sort: Programme</option><option value="branch:asc">Sort: Branch</option>
           <option value="name:asc">Sort: Name A→Z</option><option value="status:asc">Sort: Status</option>
           <option value="pushed:asc">Sort: Pushed by</option><option value="counsellor:asc">Sort: Counsellor</option>
-          <option value="caller:asc">Sort: Caller</option><option value="next:asc">Sort: Next follow-up</option><option value="lastcall:desc">Sort: Last called</option>
+          <option value="caller:asc">Sort: Caller</option><option value="dup:asc">Sort: Group duplicates</option><option value="next:asc">Sort: Next follow-up</option><option value="lastcall:desc">Sort: Last called</option>
         </select>
       </div>
       <div class="table-wrap">
@@ -167,6 +170,7 @@
             <label><input type="radio" name="kind" value="counsellor" checked><span><b>👤 Counsellor (data entry)</b><small>Adds / uploads students, gets a personal QR. Sees only students they pushed.</small></span></label>
             <label><input type="radio" name="kind" value="caller"><span><b>📞 Calling team</b><small>Calls only the students you assign, logs result, feedback &amp; next follow-up.</small></span></label>
           </div>
+          <label id="parentWrap" hidden>Reports to (counsellor's team)<select name="parent_id"><option value="">— Admin's calling team —</option></select></label>
           <label>Full name *<input name="name" maxlength="60" placeholder="e.g. Mrs. Rebekah Gaware"></label>
           <label>Username *<input name="username" maxlength="30" placeholder="e.g. rebekah"></label>
           <label>WhatsApp mobile *<input name="mobile" inputmode="numeric" maxlength="10" placeholder="students reply to this number"></label>
@@ -182,6 +186,22 @@
         <div class="members" id="members"><p class="muted small">Loading…</p></div>
       </article>
     </div>
+    <article class="card ai-card" id="aiCard">
+      <header class="ch"><div><b>🤖 AI caller</b><small>Assign students to the AI caller like any caller. It calls them in calling hours, then updates the status, feedback and next follow-up — and hands interested students to a human.</small></div>
+        <div class="ch-actions"><span class="ai-state" id="aiState">…</span></div></header>
+      <div class="ai-grid">
+        <div class="ai-box">
+          <label class="switch-row"><input type="checkbox" id="aiOn"><span><b>AI calling is ON</b><small>Calls only students assigned to "🤖 AI Caller", only between the hours below, Monday–Saturday.</small></span></label>
+          <div class="two"><label class="lab">Start hour<select id="aiStart"></select></label><label class="lab">End hour<select id="aiEnd"></select></label></div>
+          <div class="two"><label class="lab">Max calls per day<input type="number" id="aiLimit" min="1" max="2000"></label><label class="lab">Attempts per student<input type="number" id="aiTries" min="1" max="6"></label></div>
+          <label class="lab">Hand interested students over to<select id="aiHand"><option value="">— keep with AI (I will assign) —</option></select></label>
+          <label class="mini"><input type="checkbox" id="aiForm"> When the student says yes, automatically email the provisional admission form link</label>
+          <button class="btn primary" id="aiSave" type="button">Save AI settings</button>
+        </div>
+        <div class="ai-box"><div class="ai-kpis" id="aiKpis"></div><b class="small">Recent AI calls</b><ul class="ai-recent" id="aiRecent"></ul></div>
+        <div class="ai-box ai-setup" id="aiSetup"></div>
+      </div>
+    </article>
   </section>
 
   <!-- export column picker -->
@@ -216,6 +236,46 @@
     </div>
   </div>
 
+  <section id="tab-admissions" class="tabpane" hidden>
+    <div class="kpis adm-kpis" id="admKpis"></div>
+    <article class="card">
+      <header class="ch"><div><b>🎓 Admission forms &amp; fee payments</b><small>Counsellors, callers or you send a form link from a student's panel (📂). Students fill it, upload documents and pay. Verify payments here.</small></div>
+        <div class="ch-actions"><div class="seg-mini" id="admSeg"><button data-s="" class="on">All</button><button data-s="wait">Waiting for student</button><button data-s="sub">Submitted</button><button data-s="verify">To verify</button><button data-s="paid">Confirmed</button><button data-s="can">Cancelled</button></div>
+        <input id="admQ" type="search" placeholder="🔍 Name, ref, application no."></div></header>
+      <div class="table-wrap"><table class="adm-table"><thead><tr><th>Application</th><th>Student</th><th>Programme</th><th>Type</th><th>Status</th><th>Fee</th><th>Paid</th><th>Payments</th><th>Sent by</th><th></th></tr></thead><tbody id="admRows"></tbody></table></div>
+    </article>
+    <div class="grid g-2">
+      <article class="card">
+        <header class="ch"><div><b>💳 Fees &amp; payment options</b><small>What students see on the payment page</small></div></header>
+        <form id="admSet" class="tform" autocomplete="off">
+          <div class="two"><label>Provisional admission fee (₹)<input name="provisionalFee" inputmode="numeric"></label>
+            <label>Permanent admission fee<select name="permanentMode"><option value="tuition">First-year tuition from the fee structure</option><option value="fixed">A fixed amount (below)</option></select></label></div>
+          <label>Fixed permanent fee (₹, only if chosen above)<input name="permanentFee" inputmode="numeric"></label>
+          <div class="two"><label>UPI ID (for the QR code)<input name="upiId" placeholder="e.g. adypu@sbi"></label><label>Payee name<input name="payee"></label></div>
+          <div class="two"><label>Bank name<input name="bankName"></label><label>Account name<input name="accountName"></label></div>
+          <div class="two"><label>Account number<input name="accountNo"></label><label>IFSC<input name="ifsc"></label></div>
+          <label>Bank branch<input name="bankBranch"></label>
+          <label>Pay-at-campus note<input name="campusNote"></label>
+          <label>Reply-to email for student emails<input name="replyTo" type="email" placeholder="e.g. admissions@adypu.edu.in"></label>
+          <label class="chk"><input type="checkbox" name="online"> Offer online payment (card / UPI / net banking via Razorpay) <span class="small muted" id="rzpState"></span></label>
+          <button class="btn primary" type="submit">Save payment settings</button>
+        </form>
+      </article>
+      <article class="card">
+        <header class="ch"><div><b>✉️ Student email set-up</b><small>Lets the CRM email form links and messages to students</small></div><span class="ai-state" id="mailState"></span></header>
+        <div id="mailSetup"></div>
+        <details class="fees"><summary><b>📋 Fee structure in use</b> <span class="small muted" id="feeYear"></span></summary><div class="table-wrap"><table><thead><tr><th>Level</th><th>School</th><th>Programme</th><th>Specialisation</th><th>Tuition / year</th></tr></thead><tbody id="feeRows"></tbody></table></div></details>
+      </article>
+    </div>
+  </section>
+  <!-- application detail -->
+  <div class="modal" id="appModal" hidden>
+    <div class="modal-box wide">
+      <header class="modal-h"><b id="appTitle">Application</b><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
+      <div class="modal-b" id="appBody"></div>
+    </div>
+  </div>
+
   <section id="tab-security" class="tabpane" hidden>
     <div class="sec-grid">
       <article class="card">
@@ -246,6 +306,7 @@
 <div class="tip" id="tip" hidden></div>
 <div class="toast" id="toast"></div>
 <script src="/guard.js"></script>
+<script src="/panel.js"></script>
 <script src="/admin/admin.js"></script>
 </body>
 </html>

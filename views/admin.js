@@ -7,14 +7,14 @@
   const istDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const istParts = (iso) => { const d = new Date(new Date(iso).getTime() + 330 * 60000); return { dow: (d.getUTCDay() + 6) % 7, hour: d.getUTCHours() }; };
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
-  const STATUS_CLS = { 'New': 's-new', 'Contacted': 's-contacted', 'Interested': 's-interested', 'Counselling Done': 's-counsel', 'Applied': 's-applied', 'Admitted': 's-admitted', 'Not Interested': 's-no' };
+  const STATUS_CLS = { 'New': 's-new', 'Contacted': 's-contacted', 'Interested': 's-interested', 'Counselling Done': 's-counsel', 'Form Sent': 's-form', 'Applied': 's-applied', 'Admitted': 's-admitted', 'Not Interested': 's-no' };
   const SMS_BADGE = { whatsapp: ['✓ WhatsApp', 'ok'], sent: ['✓ Sent', 'ok'], logged: ['Logged (test)', 'test'], failed: ['✕ Failed', 'bad'] };
-  const FUNNEL = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Applied', 'Admitted'];
+  const FUNNEL = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Form Sent', 'Applied', 'Admitted'];
   const PAL = {
     UG: { base: '#0B1F4B', progs: ['#1e3a8a', '#3b5bdb', '#6d83f2', '#a5b4fc'], br: '#c7d2fe' },
     PG: { base: '#c2410c', progs: ['#ea580c', '#f59e0b', '#fbbf24'], br: '#fed7aa' },
   };
-  const FILTERS = ['pushedBy', 'counsellor', 'caller', 'follow', 'q', 'programme', 'branch', 'region', 'status', 'verified', 'from', 'to'];
+  const FILTERS = ['dataSource', 'appStatus', 'pushedBy', 'counsellor', 'caller', 'follow', 'q', 'programme', 'branch', 'region', 'status', 'verified', 'from', 'to'];
   let TEAM = [], STATUSES = [], LEVELS = { UG: [], PG: [] }, rows = [], allRows = [], inited = false, level = '', trendDays = 14;
   let sort = { key: 'date', dir: 'desc' };
 
@@ -44,7 +44,7 @@
   async function load() {
     const qs = params();
     const [j, everything] = await Promise.all([api('/api/admin/enquiries?' + qs), api('/api/admin/enquiries')]);
-    rows = j.rows; allRows = everything.rows; STATUSES = j.statuses; LEVELS = j.levels || LEVELS; TEAM = j.team || []; fillTeamSelects();
+    rows = j.rows; allRows = everything.rows; STATUSES = j.statuses; LEVELS = j.levels || LEVELS; TEAM = j.team || []; fillTeamSelects(); fillSources(j.sources || []);
     if (!inited) init(j);
     if (j.unseenAlerts !== undefined) setAlerts(j.unseenAlerts);
     render();
@@ -58,7 +58,7 @@
     fillProgrammes(); fillBranches();
   }
   function fillProgrammes() {
-    const cur = $('#programme').value, list = programmesOf(level);
+    const cur = $('#programme').value, list = [...new Set([...programmesOf(level), ...allRows.filter((r) => !level || r.level === level).map((r) => r.programme).filter(Boolean)])];
     $('#programme').innerHTML = '<option value="">All programmes</option>' + list.map((p) => `<option ${p === cur ? 'selected' : ''}>${esc(p)}</option>`).join('');
     if (cur && !list.includes(cur)) $('#programme').value = '';
   }
@@ -70,12 +70,21 @@
     $('#branch').disabled = !!prog && !prog.branches;
     if (cur && !list.includes(cur)) $('#branch').value = '';
   }
+  function fillSources(list) {
+    const el = $('#dataSource'), cur = el.value;
+    el.innerHTML = '<option value="">All data sources</option>' + list.map((x) => `<option value="${esc(x.s)}">🏷 ${esc(x.s)} (${x.n})</option>`).join('');
+    if (cur && !list.some((x) => x.s === cur)) el.insertAdjacentHTML('beforeend', `<option>${esc(cur)}</option>`);
+    el.value = cur;
+  }
+  const isCaller = (u) => u.kind === 'caller' || u.kind === 'ai';
+  const kIcon = (u) => (!u.active ? '⛔' : u.kind === 'ai' ? '🤖' : u.kind === 'caller' ? '📞' : '👤');
+  const parentName = (u) => { const p = u.parent_id && TEAM.find((x) => x.id === u.parent_id); return p ? ` (team of ${p.name})` : ''; };
   function fillTeamSelects() {
-    const COUNS = TEAM.filter((u) => u.kind !== 'caller'), CALLERS = TEAM.filter((u) => u.kind === 'caller');
+    const COUNS = TEAM.filter((u) => u.kind === 'counsellor'), CALLERS = TEAM.filter(isCaller);
     [['pushedBy', '<option value="">All sources</option><option value="web">🌐 Website form</option>', COUNS], ['counsellor', '<option value="">All counsellors</option><option value="none">⚠ Unassigned</option>', COUNS],
      ['caller', '<option value="">All callers</option><option value="none">📵 No caller</option>', CALLERS], ['selCaller', '<option value="">Choose caller…</option>', CALLERS.filter((u) => u.active)]].forEach(([id, base, list]) => {
       const el = $('#' + id), cur = el.value;
-      el.innerHTML = base + list.map((u) => `<option value="${u.id}">${u.active ? (u.kind === 'caller' ? '📞' : '👤') : '⛔'} ${esc(u.name)}</option>`).join('');
+      el.innerHTML = base + list.map((u) => `<option value="${u.id}">${kIcon(u)} ${esc(u.name)}${esc(parentName(u))}</option>`).join('');
       el.value = [...el.options].some((o) => o.value === cur) ? cur : '';
     });
   }
@@ -105,7 +114,7 @@
   }
 
   function renderChips() {
-    const labels = { caller: 'Caller', follow: 'Follow-up', pushedBy: 'Pushed by', counsellor: 'Counsellor', q: 'Search', programme: 'Programme', branch: 'Branch', region: 'Region', status: 'Status', verified: 'Verified', from: 'From', to: 'To' };
+    const labels = { dataSource: 'Data source', appStatus: 'Admission form', caller: 'Caller', follow: 'Follow-up', pushedBy: 'Pushed by', counsellor: 'Counsellor', q: 'Search', programme: 'Programme', branch: 'Branch', region: 'Region', status: 'Status', verified: 'Verified', from: 'From', to: 'To' };
     const chips = [];
     if (level) chips.push(`<span class="fchip">Level: <b>${level}</b><button data-clear="level" aria-label="Remove filter">✕</button></span>`);
     FILTERS.filter((k) => $('#' + k).value).forEach((k) => {
@@ -176,6 +185,10 @@
     if (best) { const [d, sl] = best[0].split('-').map(Number); out.push(['⏰', `Students are most active on <b>${DOWS[d]}, ${SLOTS[sl]}</b>. That's the best time to call back.`, '']); }
     const un = rows.filter((r) => !r.counsellor_id).length;
     if (un) out.push(['🧭', `<b>${un}</b> ${un === 1 ? 'enquiry has' : 'enquiries have'} no counsellor yet. Assign them in the Enquiries tab.`, 'counsellor:none']);
+    const dups = rows.filter((r) => r.dup_of).length;
+    if (dups) out.unshift(['👯', `<b>${dups}</b> possible duplicate ${dups === 1 ? 'entry' : 'entries'} (same mobile or email). Review and merge them.`, 'follow:dups']);
+    const toVerify = +($('#verifyCount').textContent || 0);
+    if (toVerify) out.unshift(['💳', `<b>${toVerify}</b> fee payment${toVerify === 1 ? '' : 's'} waiting for your verification (Admissions tab).`, '']);
     const nv = rows.filter((r) => !r.mobile_verified).length;
     const fails = rows.filter((r) => r.sms_status === 'failed').length;
     if (fails) out.push(['📵', `<b>${fails}</b> confirmation SMS failed. Resend them from the Enquiries tab.`, '']);
@@ -233,13 +246,13 @@
     const idx = (s) => (s === 'Not Interested' ? 1 : Math.max(0, FUNNEL.indexOf(s)));
     const reached = FUNNEL.map((_, i) => rows.filter((r) => idx(r.status) >= i).length);
     const ni = rows.filter((r) => r.status === 'Not Interested').length;
-    const icons = ['📝', '📞', '💡', '🧑‍🏫', '📄', '🎉'];
+    const icons = ['📝', '📞', '💡', '🧑‍🏫', '📨', '📄', '🎉'];
     $('#funnel').innerHTML = FUNNEL.map((st, i) => {
       const w = reached[i] ? Math.max(8, (reached[i] / rows.length) * 100) : 0;
       const conv = i ? `${pct(reached[i], reached[i - 1])}% from previous` : 'all enquiries';
       return `<button class="fs ${$('#status').value === st ? 'sel' : ''}" data-click="status:${st}" data-tip="${st}: ${reached[i]} reached this stage (${conv})">
         <span class="fl">${icons[i]} ${st}</span><span class="fb"><span class="ff f${i} ${w ? '' : 'zero'}" data-w="${w}"><b>${reached[i] || ''}</b></span></span><span class="fp">${pct(reached[i], rows.length)}%</span></button>`;
-    }).join('') + `<p class="fnote">${ni ? `❌ ${ni} not interested · ` : ''}Overall conversion to admission: <b>${pct(reached[5], rows.length)}%</b></p>`;
+    }).join('') + `<p class="fnote">${ni ? `❌ ${ni} not interested · ` : ''}Overall conversion to admission: <b>${pct(reached[FUNNEL.length - 1], rows.length)}%</b></p>`;
     applySizes($('#funnel'));
   }
 
@@ -357,13 +370,14 @@
         <td><input type="checkbox" class="pick" ${SEL.has(r.id) ? 'checked' : ''} aria-label="Select"></td>
         <td class="muted">${i + 1}</td>
         <td><code>${esc(r.ref_no)}</code></td>
-        <td><b>${esc(r.student_name)}</b></td>
+        <td><button class="openp" type="button" title="Open student panel: timeline, WhatsApp, email, admission form">${esc(r.student_name)} <span class="op">📂</span></button>
+          <div class="chips-s">${window.leadChip ? window.leadChip(r) : ''}${r.dup_of ? '<span class="dupb" title="Same mobile / email as an earlier entry">👯 duplicate</span>' : ''}${r.app_status ? `<span class="appb">🎓 ${esc(r.app_status)}</span>` : ''}</div></td>
         <td class="nowrap"><a href="tel:+91${esc(r.mobile)}">+91 ${esc(r.mobile)}</a> ${r.mobile_verified ? '<span class="vchip" title="Verified by OTP">✓</span>' : '<span class="uchip" title="Not verified">?</span>'}${r.email ? `<br><a class="muted" href="mailto:${esc(r.email)}">${esc(r.email)}</a>` : ''}</td>
         <td>${r.city ? `${esc(r.city)}<br><span class="rtag">${esc(r.region || 'Other')}</span>` : '<span class="muted">—</span>'}</td>
         <td><span class="lv ${r.level === 'PG' ? 'pg' : 'ug'}">${esc(r.level || 'UG')}</span> <b>${esc(r.programme || r.course)}</b>${r.branch ? `<br><span class="muted">${esc(r.branch)}</span>` : ''}</td>
-        <td>${r.source === 'qr-ref' ? `<span class="src qr">📱 ${esc(r.created_by_name)} (QR)</span>` : r.created_by_id ? `<span class="src me">👤 ${esc(r.created_by_name)}</span>` : r.source === 'qr' ? '<span class="src web">📱 QR scan</span>' : '<span class="src web">🌐 Website</span>'}</td>
-        <td><select class="cs ${r.counsellor_id ? '' : 'none'}"><option value="">⚠ Unassigned</option>${TEAM.filter((u) => u.kind !== 'caller' && (u.active || u.id === r.counsellor_id)).map((u) => `<option value="${u.id}" ${u.id === r.counsellor_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></td>
-        <td class="callcell"><select class="cl ${r.caller_id ? '' : 'none'}"><option value="">📵 No caller</option>${TEAM.filter((u) => u.kind === 'caller' && (u.active || u.id === r.caller_id)).map((u) => `<option value="${u.id}" ${u.id === r.caller_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select>
+        <td>${r.source === 'qr-ref' ? `<span class="src qr">📱 ${esc(r.created_by_name)} (QR)</span>` : r.created_by_id ? `<span class="src me">👤 ${esc(r.created_by_name)}</span>` : r.source === 'qr' ? '<span class="src web">📱 QR scan</span>' : '<span class="src web">🌐 Website</span>'}${r.data_source ? `<br><span class="dsrc" title="Data source${r.data_location ? ' · ' + esc(r.data_location) : ''}">🏷 ${esc(r.data_source)}</span>` : ''}</td>
+        <td><select class="cs ${r.counsellor_id ? '' : 'none'}"><option value="">⚠ Unassigned</option>${TEAM.filter((u) => u.kind === 'counsellor' && (u.active || u.id === r.counsellor_id)).map((u) => `<option value="${u.id}" ${u.id === r.counsellor_id ? 'selected' : ''}>${esc(u.name)}</option>`).join('')}</select></td>
+        <td class="callcell"><select class="cl ${r.caller_id ? '' : 'none'}"><option value="">📵 No caller</option>${TEAM.filter((u) => isCaller(u) && (u.active || u.id === r.caller_id)).map((u) => `<option value="${u.id}" ${u.id === r.caller_id ? 'selected' : ''}>${u.kind === 'ai' ? '🤖 ' : ''}${esc(u.name)}</option>`).join('')}</select>
           ${callInfo(r)}</td>
         <td><select class="st ${STATUS_CLS[r.status] || ''}">${STATUSES.map((s) => `<option ${s === r.status ? 'selected' : ''}>${esc(s)}</option>`).join('')}</select></td>
         <td><input class="note" value="${esc(r.notes)}" placeholder="Add note…" maxlength="500"></td>
@@ -401,7 +415,7 @@
 
   $('#lvlSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; level = b.dataset.level; syncLevel(); fillProgrammes(); fillBranches(); load(); });
   $('#programme').addEventListener('change', () => { fillBranches(); load(); });
-  ['branch', 'region', 'status', 'verified', 'pushedBy', 'counsellor', 'caller', 'follow'].forEach((id) => $('#' + id).addEventListener('change', load));
+  ['branch', 'region', 'status', 'verified', 'pushedBy', 'counsellor', 'caller', 'follow', 'dataSource', 'appStatus'].forEach((id) => $('#' + id).addEventListener('change', load));
   ['from', 'to'].forEach((id) => $('#' + id).addEventListener('change', () => { markPreset(''); load(); }));
   let qt; $('#q').addEventListener('input', () => { clearTimeout(qt); qt = setTimeout(load, 300); });
   const markPreset = (p) => $('#presets').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.p === p));
@@ -426,7 +440,9 @@
     const b = e.target.closest('.tab'); if (!b) return;
     document.querySelectorAll('.tab').forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-selected', on); });
     document.querySelectorAll('.tabpane').forEach((p) => { p.hidden = p.id !== 'tab-' + b.dataset.tab; });
-    if (b.dataset.tab === 'team') loadTeam();
+    document.querySelector('.cmdbar').hidden = !['insights', 'table'].includes(b.dataset.tab); // the filters only apply to these two tabs
+    if (b.dataset.tab === 'team') { loadTeam(); loadAi(); }
+    if (b.dataset.tab === 'admissions') loadAdmissions();
     if (b.dataset.tab === 'security') loadSecurity();
   });
   document.querySelectorAll('th.sortable').forEach((th) => th.addEventListener('click', () => {
@@ -460,6 +476,7 @@
   $('#rows').addEventListener('click', async (e) => {
     const tr = e.target.closest('tr'); if (!tr) return;
     const r = rows.find((x) => x.id == tr.dataset.id);
+    if (e.target.closest('.openp')) { window.StudentPanel.open(r.id, { onClose: load }); return; }
     if (e.target.classList.contains('resend')) {
       e.target.disabled = true;
       const j = await api(`/api/admin/enquiries/${r.id}/sms`, { method: 'POST' });
@@ -483,9 +500,9 @@
   }
   function renderAssign() {
     $('#selCount').textContent = SEL.size; $('#fltCount').textContent = rows.length;
-    const callers = TEAM.filter((u) => u.kind === 'caller' && u.active);
+    const callers = TEAM.filter((u) => isCaller(u) && u.active);
     const keep = new Set([...document.querySelectorAll('#shareCallers input:checked')].map((x) => x.value));
-    $('#shareCallers').innerHTML = callers.length ? callers.map((u) => `<label class="chipc"><input type="checkbox" value="${u.id}" ${keep.has(String(u.id)) ? 'checked' : ''}> 📞 ${esc(u.name)}</label>`).join('')
+    $('#shareCallers').innerHTML = callers.length ? callers.map((u) => `<label class="chipc"><input type="checkbox" value="${u.id}" ${keep.has(String(u.id)) ? 'checked' : ''}> ${kIcon(u)} ${esc(u.name)}</label>`).join('')
       : '<span class="small muted">No calling-team accounts yet — create one in the Team tab (choose "Calling team").</span>';
     const all = $('#selAll'); if (all) all.checked = rows.length > 0 && rows.every((r) => SEL.has(r.id));
   }
@@ -535,7 +552,7 @@
   }
   $('#openRules').addEventListener('click', async () => {
     await loadRules();
-    const callers = TEAM.filter((u) => u.kind === 'caller' && u.active);
+    const callers = TEAM.filter((u) => isCaller(u) && u.active);
     $('#ruleOn').checked = !!RULES.enabled; $('#callOn').checked = RULES.assignedCalling !== false;
     $('#ruleGrid').innerHTML = callers.length ? RULES.regions.map((reg) => `<div class="rule"><b>${esc(reg)}</b><div>${callers.map((u) => `<label class="chipc"><input type="checkbox" data-reg="${esc(reg)}" value="${u.id}" ${(RULES.rules[reg] || []).includes(u.id) ? 'checked' : ''}> ${esc(u.name)}</label>`).join('')}</div></div>`).join('')
       : '<p class="muted">Create calling-team accounts first (Team tab → "Calling team").</p>';
@@ -635,24 +652,136 @@
 
   async function loadTeam() {
     const j = await api('/api/admin/users');
-    const us = j.users || [];
-    $('#teamSum').textContent = `${us.filter((u) => u.active && u.kind !== 'caller').length} counsellors · ${us.filter((u) => u.active && u.kind === 'caller').length} callers · ${us.reduce((a, u) => a + u.pushed, 0)} students pushed`;
-    $('#members').innerHTML = us.length ? us.map((u) => `<div class="mem ${u.active ? '' : 'off'}" data-id="${u.id}">
+    const us = (j.users || []).filter((u) => u.kind !== 'ai');
+    $('#teamSum').textContent = `${us.filter((u) => u.active && u.kind === 'counsellor').length} counsellors · ${us.filter((u) => u.active && u.kind === 'caller').length} callers · ${us.reduce((a, u) => a + u.pushed, 0)} students pushed`;
+    const ps = $('#userForm').parent_id, curP = ps.value;
+    ps.innerHTML = '<option value="">— Admin\'s calling team —</option>' + us.filter((u) => u.kind === 'counsellor' && u.active).map((u) => `<option value="${u.id}">👤 ${esc(u.name)}'s team</option>`).join(''); ps.value = curP;
+    const card = (u, child) => `<div class="mem ${u.active ? '' : 'off'} ${child ? 'child' : ''}" data-id="${u.id}">
       <div class="mem-av">${esc(initials(u.name))}</div>
-      <div class="mem-n"><b>${esc(u.name)}</b> <span class="kind ${u.kind}">${u.kind === 'caller' ? '📞 Calling team' : '👤 Counsellor'}</span><small>@${esc(u.username)}${u.mobile ? ' · ' + esc(u.mobile) : ''} · ${u.active ? ago(u.last_login) : 'disabled'}</small></div>
+      <div class="mem-n"><b>${esc(u.name)}</b> <span class="kind ${u.kind}">${u.kind === 'caller' ? '📞 Calling team' : '👤 Counsellor'}</span>${u.parent_id && !child ? ` <span class="kind parent">↳ ${esc((us.find((x) => x.id === u.parent_id) || {}).name || '')}'s team</span>` : ''}<small>@${esc(u.username)}${u.mobile ? ' · ' + esc(u.mobile) : ''} · ${u.active ? ago(u.last_login) : 'disabled'}</small></div>
       ${u.kind === 'caller' ? `<div class="mem-s"><b>${u.calling}</b><small>assigned</small></div><div class="mem-s"><b>${u.called}</b><small>called</small></div>
       <div class="mem-s ${u.untouched ? 'warn' : ''}"><b>${u.untouched}</b><small>untouched</small></div><div class="mem-s ${u.overdue ? 'warn' : ''}"><b>${u.overdue}</b><small>overdue</small></div>`
       : `<div class="mem-s"><b>${u.pushed}</b><small>pushed</small></div><div class="mem-s"><b>${u.pushedWeek}</b><small>this week</small></div>
       <div class="mem-s"><b>${u.assigned}</b><small>counselling</small></div><div class="mem-s"><b>${u.admitted}</b><small>admitted</small></div>`}
-      <div class="mem-a"><button class="view">📋 Students</button>${u.kind === 'caller' ? '' : `<a class="qrb" href="/qr-poster.pdf?ref=${encodeURIComponent(u.username)}" target="_blank" rel="noopener">📱 QR</a>`}<button class="reset">🔑 Reset password</button>${u.active ? '<button class="dis">⛔ Disable</button>' : '<button class="ena">✅ Enable</button>'}</div></div>`).join('')
+      <div class="mem-a"><button class="view">📋 Students</button>${u.kind === 'caller' ? '' : `<a class="qrb" href="/qr-poster.pdf?ref=${encodeURIComponent(u.username)}" target="_blank" rel="noopener">📱 QR</a>`}<button class="reset">🔑 Reset password</button>${u.active ? '<button class="dis">⛔ Disable</button>' : '<button class="ena">✅ Enable</button>'}</div></div>`;
+    const heads = us.filter((u) => u.kind === 'counsellor'), orphans = us.filter((u) => u.kind === 'caller' && !heads.some((h) => h.id === u.parent_id));
+    $('#members').innerHTML = us.length ? heads.map((h) => card(h) + us.filter((c) => c.kind === 'caller' && c.parent_id === h.id).map((c) => card(c, true)).join('')).join('')
+      + (orphans.length ? `<p class="mem-grp">📞 Admin's calling team</p>` + orphans.map((c) => card(c)).join('') : '')
       : '<p class="muted small">No sub-admins yet. Create the first one on the left.</p>';
   }
+  $('#userForm').addEventListener('change', (e) => { if (e.target.name === 'kind') $('#parentWrap').hidden = e.target.value !== 'caller'; });
+
+  // ---------- AI caller ----------
+  async function loadAi() {
+    const j = await api('/api/admin/ai-caller'); if (!j.settings) return;
+    const s = j.settings, hours = Array.from({ length: 17 }, (_, i) => i + 6);
+    const hl = (h) => `${h % 12 || 12}:00 ${h < 12 ? 'am' : 'pm'}`;
+    $('#aiStart').innerHTML = hours.map((h) => `<option value="${h}" ${h === s.startHour ? 'selected' : ''}>${hl(h)}</option>`).join('');
+    $('#aiEnd').innerHTML = hours.map((h) => `<option value="${h}" ${h === s.endHour ? 'selected' : ''}>${hl(h)}</option>`).join('');
+    $('#aiOn').checked = !!s.enabled; $('#aiLimit').value = s.dailyLimit; $('#aiTries').value = s.maxAttempts; $('#aiForm').checked = !!s.autoForm;
+    $('#aiHand').innerHTML = '<option value="">— keep with AI (I will assign) —</option>' + TEAM.filter((u) => u.kind === 'caller' && u.active).map((u) => `<option value="${u.id}" ${u.id === s.handoffId ? 'selected' : ''}>📞 ${esc(u.name)}</option>`).join('');
+    const prov = { vapi: '✅ Connected: Vapi voice AI', webhook: '✅ Connected: custom AI calling service', none: '⚠ Not connected yet' }[j.provider];
+    $('#aiState').textContent = `${s.enabled && j.provider !== 'none' ? '🟢 Calling' : s.enabled ? '🟡 On, waiting for connection' : '⚪ Off'} · ${prov}`;
+    $('#aiState').className = 'ai-state ' + (s.enabled && j.provider !== 'none' ? 'on' : '');
+    const q = j.queue;
+    $('#aiKpis').innerHTML = [['Assigned', q.assigned], ['Waiting', q.waiting], ['On a call', q.inProgress], ['Calls today', q.today], ['Connected today', q.connectedToday], ['Interested', q.interested]]
+      .map(([k, v]) => `<div><b>${v}</b><small>${k}</small></div>`).join('');
+    $('#aiRecent').innerHTML = j.recent.length ? j.recent.map((c) => `<li><code>${esc(c.ref)}</code> <b>${esc(c.outcome)}</b>${c.status ? ' → ' + esc(c.status) : ''} <span class="muted small">${fmt(c.at)}</span>${c.summary ? `<p>${esc(c.summary)}</p>` : ''}</li>`).join('') : '<li class="muted small">No AI calls yet.</li>';
+    $('#aiSetup').innerHTML = `<b>⚙ Connect a voice-AI service (one time)</b>
+      <ol class="small"><li>Create an account on <b>Vapi</b> (vapi.ai) or any Indian voice-AI provider (Bolna, Exotel AI…), add an Indian calling number and create an assistant with the script below (English / Hindi / Marathi).</li>
+      <li>In the assistant, set the <b>Server URL</b> to:<div class="copyrow"><input readonly value="${esc(j.webhook)}"><button class="btn xs ghost" data-copy="${esc(j.webhook)}" type="button">Copy</button></div>and add structured-data fields: <code>interested</code>, <code>callback_date</code>, <code>wants_admission_form</code>.</li>
+      <li>On Render → Environment add <code>VAPI_API_KEY</code>, <code>VAPI_ASSISTANT_ID</code>, <code>VAPI_PHONE_NUMBER_ID</code> (or <code>AI_CALLER_WEBHOOK_URL</code> for another provider), save, then switch AI calling ON here.</li></ol>
+      <details><summary class="small"><b>📜 Call script (prompt) for the assistant</b></summary><textarea readonly rows="9" class="ai-prompt">${esc(j.prompt)}</textarea><button class="btn xs ghost" data-copy="${esc(j.prompt)}" type="button">Copy script</button></details>
+      <p class="small muted">Student numbers are shared only with the calling service, only for students assigned to the AI caller. Every AI call is on the student's timeline.</p>`;
+  }
+  $('#aiCard').addEventListener('click', async (e) => { const c = e.target.closest('[data-copy]'); if (c) { try { await navigator.clipboard.writeText(c.dataset.copy); toast('Copied ✓'); } catch { prompt('Copy', c.dataset.copy); } } });
+  $('#aiSave').addEventListener('click', async () => {
+    const j = await api('/api/admin/ai-caller', { method: 'PUT', body: JSON.stringify({ enabled: $('#aiOn').checked, startHour: $('#aiStart').value, endHour: $('#aiEnd').value, dailyLimit: $('#aiLimit').value, maxAttempts: $('#aiTries').value, handoffId: $('#aiHand').value || null, autoForm: $('#aiForm').checked }) });
+    if (j.error) return toast(j.error); toast('✅ AI caller settings saved'); loadAi();
+  });
+
+  // ---------- Admissions ----------
+  let ADM = { apps: [] }, admSeg = '';
+  const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+  const APPCLS = { Sent: 'sent', Opened: 'open', Submitted: 'sub', 'Payment pending': 'pend', 'Part paid': 'pend', Paid: 'paid', Cancelled: 'can' };
+  async function loadAdmCount() { try { const j = await api('/api/admin/applications'); ADM = j; const n = j.totals.toVerify; $('#verifyCount').textContent = n; $('#verifyCount').hidden = !n; return j; } catch { return null; } }
+  async function loadAdmissions() {
+    const j = await loadAdmCount(); if (!j) return; const t = j.totals;
+    $('#admKpis').innerHTML = [['📨', 'Form links sent', t.sent, ''], ['📄', 'Forms submitted', t.submitted, ''], ['💳', 'Payments to verify', t.toVerify, t.toVerify ? 'k-alert' : ''], ['🎉', 'Admissions confirmed', t.paid, ''],
+      ['💰', 'Fees collected', inr(t.collected), ''], ['⏳', 'Fees still due', inr(t.due), '']].map(([i, k, v, c]) => `<div class="kpi tk ${c}"><span class="tk-i">${i}</span><div><div class="kt">${k}</div><div class="kv"><b>${v}</b></div></div></div>`).join('');
+    renderAdm(); loadAdmSettings();
+  }
+  function renderAdm() {
+    const q = $('#admQ').value.trim().toLowerCase();
+    const list = ADM.apps.filter((a) => (!admSeg || (admSeg === 'wait' && ['Sent', 'Opened'].includes(a.status)) || (admSeg === 'sub' && ['Submitted', 'Part paid'].includes(a.status)) || (admSeg === 'verify' && a.payments.some((p) => p.status === 'Pending verification'))
+      || (admSeg === 'paid' && a.status === 'Paid') || (admSeg === 'can' && a.status === 'Cancelled')) && (!q || [a.app_no, a.student && a.student.name, a.student && a.student.ref, a.programme].some((x) => String(x || '').toLowerCase().includes(q))));
+    $('#admRows').innerHTML = list.length ? list.map((a) => `<tr data-id="${a.id}">
+      <td>${a.app_no ? `<code>${esc(a.app_no)}</code>` : '<span class="muted small">not submitted</span>'}<br><small class="muted">${fmt(a.created_at)}</small></td>
+      <td>${a.student ? `<button class="openp" data-sid="${a.student.id}" type="button">${esc(a.student.name)} <span class="op">📂</span></button><br><code>${esc(a.student.ref)}</code>` : '<span class="muted">deleted</span>'}</td>
+      <td>${esc(a.programme || '')}</td><td>${esc(a.type)}</td><td><span class="appst ${APPCLS[a.status] || ''}">${esc(a.status)}</span></td>
+      <td class="nowrap">${inr(a.fee)} <button class="icon fee" title="Change fee">✏️</button></td><td class="nowrap"><b>${inr(a.paid)}</b></td>
+      <td>${a.payments.map((p) => `<div class="payrow ${p.status === 'Pending verification' ? 'pend' : p.status === 'Rejected' ? 'bad' : 'ok'}">${inr(p.amount)} · ${esc(p.mode)}${p.reference ? ` · <code>${esc(p.reference)}</code>` : ''} · ${esc(p.status)}
+        ${p.status === 'Pending verification' ? `<span class="vbtns"><button class="btn xs primary vok" data-pid="${p.id}" type="button">✓ Verify</button><button class="btn xs ghost vno" data-pid="${p.id}" type="button">✕ Reject</button></span>` : ''}
+        ${p.receipt_no ? `<a class="small" href="/api/admin/applications/${a.id}/receipt/${p.id}.pdf" target="_blank" rel="noopener">🧾 receipt</a>` : ''}</div>`).join('') || '<span class="muted small">—</span>'}</td>
+      <td class="small">${esc(a.created_by || '')}${a.student && a.student.caller ? `<br><span class="muted">caller: ${esc(a.student.caller)}</span>` : ''}</td>
+      <td class="nowrap">${a.app_no ? '<button class="btn xs ghost view-app" type="button">👁 View</button> <a class="btn xs ghost" href="/api/admin/applications/' + a.id + '/pdf" target="_blank" rel="noopener">⬇ PDF</a>' : ''}
+        <button class="btn xs ghost cp" data-link="${esc(a.link)}" type="button">🔗</button>${a.app_no && a.status !== 'Paid' && a.status !== 'Cancelled' ? ' <button class="btn xs ghost rec" type="button">💵 Record payment</button>' : ''}
+        ${a.status !== 'Paid' && a.status !== 'Cancelled' ? ' <button class="icon can" title="Cancel this form">🗑</button>' : ''}</td></tr>`).join('') : '<tr><td colspan="10" class="empty">No admission forms yet. Open a student (📂) → 🎓 Admission form to create one.</td></tr>';
+  }
+  $('#admSeg').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; admSeg = b.dataset.s; $('#admSeg').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); renderAdm(); });
+  $('#admQ').addEventListener('input', renderAdm);
+  $('#admRows').addEventListener('click', async (e) => {
+    const tr = e.target.closest('tr'); if (!tr) return; const a = ADM.apps.find((x) => x.id == tr.dataset.id);
+    const op = e.target.closest('.openp'); if (op) return window.StudentPanel.open(+op.dataset.sid, { onClose: loadAdmissions });
+    if (e.target.closest('.cp')) { try { await navigator.clipboard.writeText(a.link); toast('Form link copied ✓'); } catch { prompt('Copy', a.link); } return; }
+    const v = e.target.closest('.vok, .vno');
+    if (v) { const ok = v.classList.contains('vok'); const p = a.payments.find((x) => x.id == v.dataset.pid);
+      const note = ok ? '' : prompt('Reason for rejecting (shown on the timeline)', 'Amount not received'); if (!ok && note === null) return;
+      if (ok && !confirm(`Confirm that ${inr(p.amount)} (${p.mode}${p.reference ? ', ref ' + p.reference : ''}) has been RECEIVED in the university account?`)) return;
+      const j = await api(`/api/admin/payments/${p.id}/verify`, { method: 'POST', body: JSON.stringify({ ok, note }) }); if (j.error) return toast(j.error);
+      toast(ok ? '✅ Payment verified · receipt created · status → Admitted' : 'Payment rejected'); loadAdmissions(); load(); return; }
+    if (e.target.closest('.rec')) { const amt = prompt(`Amount received for ${a.app_no} (₹)`, Math.max(0, a.fee - a.paid)); if (!amt) return; const mode = prompt('Mode (e.g. Cash at campus, DD, Cheque no.)', 'Cash at campus'); if (mode === null) return;
+      const j = await api(`/api/admin/applications/${a.id}/payment`, { method: 'POST', body: JSON.stringify({ amount: amt, mode }) }); if (j.error) return toast(j.error); toast('✅ Payment recorded · receipt created'); loadAdmissions(); load(); return; }
+    if (e.target.closest('.fee')) { const f = prompt(`Fee for this ${a.type.toLowerCase()} admission (₹)`, a.fee); if (f === null) return; await api(`/api/admin/applications/${a.id}`, { method: 'PATCH', body: JSON.stringify({ fee: f }) }); toast('Fee updated'); loadAdmissions(); return; }
+    if (e.target.closest('.can')) { if (!confirm('Cancel this admission form link? The student can no longer use it.')) return; await api(`/api/admin/applications/${a.id}`, { method: 'PATCH', body: JSON.stringify({ cancel: true }) }); toast('Form cancelled'); loadAdmissions(); return; }
+    if (e.target.closest('.view-app')) {
+      const j = await api(`/api/admin/applications/${a.id}`);
+      $('#appTitle').textContent = `🎓 ${a.app_no} · ${a.student ? a.student.name : ''} · ${a.type} admission`;
+      $('#appBody').innerHTML = `<div class="appv-files">${j.files.map((f) => `<a class="btn xs ghost" href="/api/admin/applications/${a.id}/file/${f.id}" target="_blank" rel="noopener">📎 ${esc(f.kind)} · ${(f.size / 1024).toFixed(0)} KB</a>`).join('') || '<span class="muted small">No documents uploaded</span>'}
+        <a class="btn xs primary" href="/api/admin/applications/${a.id}/pdf" target="_blank" rel="noopener">⬇ Application PDF</a>${a.status === 'Submitted' ? ' <button class="btn xs ghost" id="reopenApp" type="button">↺ Re-open for corrections</button>' : ''}</div>`
+        + j.rows.map((sec) => `<div class="appv"><b>${esc(sec.title)}</b><dl>${sec.items.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl></div>`).join('');
+      $('#appModal').hidden = false;
+      const ro = $('#reopenApp'); if (ro) ro.addEventListener('click', async () => { await api(`/api/admin/applications/${a.id}`, { method: 'PATCH', body: JSON.stringify({ reopen: true }) }); toast('Form re-opened — the student can edit and submit again'); $('#appModal').hidden = true; loadAdmissions(); });
+    }
+  });
+  async function loadAdmSettings() {
+    const j = await api('/api/admin/admission-settings'), f = $('#admSet');
+    Object.entries(j.settings).forEach(([k, v]) => { const el = f.elements[k]; if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? ''; });
+    $('#rzpState').textContent = j.razorpay ? '✅ Razorpay keys set' : '(add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on Render to activate)';
+    $('#mailState').textContent = j.emailReady ? '🟢 Ready' : '⚪ Not set up'; $('#mailState').className = 'ai-state ' + (j.emailReady ? 'on' : '');
+    const secret = Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 56]).join('');
+    $('#mailSetup').innerHTML = j.emailReady ? '<p class="small">✅ Student emails are working. Form links and messages are sent from the admission Gmail; replies go to the reply-to address.</p>'
+      : `<ol class="small"><li>Open your Google Apps Script mailer (script.google.com) and replace the code with the new <b>google-apps-script/alert-mailer.gs</b> from the GitHub repo (version 2).</li>
+        <li>In that code set <code>SECRET</code> to:<div class="copyrow"><input readonly value="${secret}"><button class="btn xs ghost" data-copy="${secret}" type="button">Copy</button></div></li>
+        <li>Deploy → Manage deployments → ✏️ → Version: <b>New version</b> → Deploy (the link stays the same).</li>
+        <li>On Render → Environment add <code>MAIL_WEBHOOK_SECRET</code> = the same secret, and save.</li></ol>
+        <p class="small muted">${j.relaySecret ? 'MAIL_WEBHOOK_SECRET is set — waiting for the new script version.' : 'Until then, share form links by WhatsApp or copy the link.'}</p>`;
+    $('#feeYear').textContent = j.feeYear;
+    $('#feeRows').innerHTML = j.feeTable.map((r) => `<tr><td>${esc(r.level)}</td><td>${esc(r.school.replace('School of ', ''))}</td><td>${esc(r.programme)}</td><td>${esc(r.branch || '—')}</td><td class="nowrap"><b>${inr(r.fee)}</b></td></tr>`).join('');
+  }
+  $('#mailSetup').addEventListener('click', async (e) => { const c = e.target.closest('[data-copy]'); if (c) { try { await navigator.clipboard.writeText(c.dataset.copy); toast('Copied ✓'); } catch { prompt('Copy', c.dataset.copy); } } });
+  $('#admSet').addEventListener('submit', async (e) => {
+    e.preventDefault(); const f = e.target, body = {};
+    [...f.elements].forEach((el) => { if (el.name) body[el.name] = el.type === 'checkbox' ? el.checked : el.value; });
+    const j = await api('/api/admin/admission-settings', { method: 'PUT', body: JSON.stringify(body) }); if (j.error) return toast(j.error); toast('✅ Payment settings saved');
+  });
+  loadAdmCount(); setInterval(loadAdmCount, 120000);
   $('#members').addEventListener('click', async (e) => {
     const card = e.target.closest('.mem'); if (!card) return;
     const id = card.dataset.id;
     if (e.target.classList.contains('view')) {
       FILTERS.forEach((k) => { $('#' + k).value = ''; }); level = ''; syncLevel(); fillProgrammes(); fillBranches();
-      document.querySelector('.tab[data-tab=table]').click(); const u = TEAM.find((x) => x.id == id); $(u && u.kind === 'caller' ? '#caller' : '#pushedBy').value = id; load(); return;
+      document.querySelector('.tab[data-tab=table]').click(); const u = TEAM.find((x) => x.id == id); $(u && isCaller(u) ? '#caller' : '#pushedBy').value = id; load(); return;
     }
     if (e.target.classList.contains('reset')) {
       const j = await api(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ resetPassword: true }) });
@@ -667,11 +796,11 @@
     e.preventDefault();
     const f = e.target, msg = $('#userMsg'); msg.textContent = '';
     const r = await fetch('/api/admin/users', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
-      body: JSON.stringify({ kind: (f.querySelector('[name=kind]:checked') || {}).value, name: f.elements['name'].value, username: f.username.value, mobile: f.mobile.value, password: f.password.value }) });
+      body: JSON.stringify({ kind: (f.querySelector('[name=kind]:checked') || {}).value, parent_id: f.parent_id.value || null, name: f.elements['name'].value, username: f.username.value, mobile: f.mobile.value, password: f.password.value }) });
     const j = await r.json();
     if (!r.ok) { msg.textContent = j.error || 'Could not create the account.'; return; }
     showPw(j.user, j.password, `✅ Account created for ${j.user.name}`);
-    f.reset(); loadTeam(); load();
+    f.reset(); $('#parentWrap').hidden = true; loadTeam(); load();
   });
   $('#userForm').username.addEventListener('input', (e) => { e.target.value = e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''); });
 

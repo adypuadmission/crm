@@ -7,12 +7,28 @@ const sec = require('./sec');
 const usePg = !!process.env.DATABASE_URL;
 let pool, sqlite;
 
-const COLS = 'id, ref_no, student_name, mobile, email, city, region, level, programme, branch, programme_group, course, status, notes, mobile_verified, sms_status, source, created_by_id, created_by_name, counsellor_id, counsellor_name, created_at, updated_at, next_action_date, last_call_at, last_call_outcome, call_count, caller_id, caller_name, caller_assigned_at';
+const COLS = 'id, ref_no, student_name, mobile, email, city, region, level, programme, branch, programme_group, course, status, notes, mobile_verified, sms_status, source, created_by_id, created_by_name, counsellor_id, counsellor_name, created_at, updated_at, next_action_date, last_call_at, last_call_outcome, call_count, caller_id, caller_name, caller_assigned_at, data_source, data_location, dup_of, app_status, admission_type, ai_attempts, ai_pending_at, ai_call_id';
 const NEW_COLS = [['city', 'TEXT'], ['region', 'TEXT'], ['mobile_verified', 'INTEGER DEFAULT 0'], ['sms_status', 'TEXT'], ['level', 'TEXT'], ['programme', 'TEXT'], ['branch', 'TEXT'],
   ['created_by_id', 'INTEGER'], ['created_by_name', 'TEXT'], ['counsellor_id', 'INTEGER'], ['counsellor_name', 'TEXT'], ['mobile_hash', 'TEXT'],
   ['next_action_date', 'TEXT'], ['last_call_at', 'TEXT'], ['last_call_outcome', 'TEXT'], ['call_count', 'INTEGER DEFAULT 0'],
   // calling assignment is separate from the data-entry counsellor
-  ['caller_id', 'INTEGER'], ['caller_name', 'TEXT'], ['caller_assigned_at', 'TEXT']];
+  ['caller_id', 'INTEGER'], ['caller_name', 'TEXT'], ['caller_assigned_at', 'TEXT'],
+  // where the data came from (typed by the counsellor before uploading), duplicate link, admission form + AI caller state
+  ['data_source', 'TEXT'], ['data_location', 'TEXT'], ['email_hash', 'TEXT'], ['dup_of', 'INTEGER'], ['app_status', 'TEXT'], ['admission_type', 'TEXT'],
+  ['ai_attempts', 'INTEGER DEFAULT 0'], ['ai_pending_at', 'TEXT'], ['ai_call_id', 'TEXT']];
+// Admission applications (form data + documents are encrypted), payments and a per-student timeline
+const ID = () => (usePg ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT');
+const EXTRA_TABLES = () => [
+  `CREATE TABLE IF NOT EXISTS applications (id ${ID()}, enquiry_id INTEGER NOT NULL, token_hash TEXT UNIQUE, token_enc TEXT, app_no TEXT, admission_type TEXT,
+    status TEXT NOT NULL DEFAULT 'Sent', data TEXT, programme TEXT, created_by TEXT, created_at TEXT NOT NULL, opened_at TEXT, submitted_at TEXT,
+    fee_amount INTEGER, paid_amount INTEGER DEFAULT 0, updated_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS app_files (id ${ID()}, application_id INTEGER NOT NULL, kind TEXT NOT NULL, name TEXT, mime TEXT, size INTEGER, data TEXT, at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS payments (id ${ID()}, application_id INTEGER NOT NULL, amount INTEGER NOT NULL, mode TEXT NOT NULL, reference TEXT, proof_file_id INTEGER,
+    status TEXT NOT NULL, note TEXT, gateway_order TEXT, gateway_payment TEXT, receipt_no TEXT, created_at TEXT NOT NULL, verified_by TEXT, verified_at TEXT)`,
+  `CREATE TABLE IF NOT EXISTS timeline (id ${ID()}, enquiry_id INTEGER NOT NULL, at TEXT NOT NULL, actor TEXT, kind TEXT, text TEXT)`,
+  'CREATE INDEX IF NOT EXISTS idx_app_enq ON applications(enquiry_id)', 'CREATE INDEX IF NOT EXISTS idx_files_app ON app_files(application_id)',
+  'CREATE INDEX IF NOT EXISTS idx_pay_app ON payments(application_id)', 'CREATE INDEX IF NOT EXISTS idx_tl_enq ON timeline(enquiry_id)',
+  'CREATE INDEX IF NOT EXISTS idx_enq_ehash ON enquiries(email_hash)'];
 // Call log: every call / WhatsApp a counsellor makes, with outcome + feedback (feedback is encrypted)
 const CALLS_PG = `CREATE TABLE IF NOT EXISTS calls (id SERIAL PRIMARY KEY, enquiry_id INTEGER NOT NULL, user_id INTEGER, user_name TEXT, at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   channel TEXT, outcome TEXT, feedback TEXT, status_after TEXT, next_action_date TEXT)`;
@@ -49,6 +65,8 @@ async function init() {
     await pool.query(CALLS_PG);
     await pool.query('CREATE INDEX IF NOT EXISTS idx_calls_enq ON calls(enquiry_id)');
     await pool.query('CREATE INDEX IF NOT EXISTS idx_enq_next ON enquiries(next_action_date)');
+    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id INTEGER');
+    for (const t of EXTRA_TABLES()) await pool.query(t);
   } else {
     let Database;
     try { Database = require('better-sqlite3'); } catch {
@@ -74,9 +92,12 @@ async function init() {
     sqlite.exec('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
     sqlite.exec('CREATE INDEX IF NOT EXISTS idx_enq_mhash ON enquiries(mobile_hash); CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at);');
     sqlite.exec(CALLS_SQLITE + '; CREATE INDEX IF NOT EXISTS idx_calls_enq ON calls(enquiry_id); CREATE INDEX IF NOT EXISTS idx_enq_next ON enquiries(next_action_date);');
+    if (!sqlite.prepare('PRAGMA table_info(users)').all().some((c) => c.name === 'parent_id')) sqlite.exec('ALTER TABLE users ADD COLUMN parent_id INTEGER');
+    for (const t of EXTRA_TABLES()) sqlite.exec(t);
   }
   await migrateProgrammes();
   await migrateEncryption();
+  await migrateDuplicates();
   console.log(`Storage: ${usePg ? 'PostgreSQL' : 'SQLite (local file)'}`);
 }
 
@@ -106,19 +127,45 @@ async function migrateEncryption() {
   if (rows.length || users.length) console.log(`🔐 Encrypted personal data in ${rows.length} enquiries and ${users.length} user records`);
 }
 
+// Email blind index + link every later entry of the same student (same mobile or email) to the first one
+async function migrateDuplicates() {
+  const rows = await all('SELECT id, email, email_hash FROM enquiries WHERE email_hash IS NULL');
+  for (const r of rows) { const e = sec.decrypt(r.email); await run('UPDATE enquiries SET email_hash = $1 WHERE id = $2', [e ? sec.blind(e) : '-', r.id]); }
+  if (rows.length) await relinkDuplicates();
+}
+async function relinkDuplicates() {
+  const rows = await all('SELECT id, mobile_hash, email_hash, dup_of FROM enquiries ORDER BY id ASC');
+  const firstBy = new Map(); let n = 0;
+  for (const r of rows) {
+    const keys = ['m:' + r.mobile_hash, r.email_hash && r.email_hash !== '-' ? 'e:' + r.email_hash : null].filter(Boolean);
+    const first = keys.map((k) => firstBy.get(k)).find(Boolean) || null;
+    if ((first || null) !== (r.dup_of || null)) { await run('UPDATE enquiries SET dup_of = $1 WHERE id = $2', [first, r.id]); n++; }
+    keys.forEach((k) => { if (!firstBy.has(k)) firstBy.set(k, first || r.id); });
+  }
+  return n;
+}
+// The earliest enquiry with the same mobile number or email (any programme)
+async function findSameStudent(mobile, email) {
+  const r = await get(`SELECT ${COLS} FROM enquiries WHERE mobile_hash = $1 ${email ? 'OR email_hash = $2' : ''} ORDER BY id ASC LIMIT 1`, email ? [sec.blind(mobile), sec.blind(email)] : [sec.blind(mobile)]);
+  return norm(r);
+}
+
 const q = (sql) => (usePg ? sql : sql.replace(/\$\d+/g, '?'));
 async function all(sql, params = []) { return usePg ? (await pool.query(sql, params)).rows : sqlite.prepare(q(sql)).all(...params); }
 async function get(sql, params = []) { return (await all(sql, params))[0]; }
 async function run(sql, params = []) { return usePg ? pool.query(sql, params) : sqlite.prepare(q(sql)).run(...params); }
 
-const norm = (r) => r && ({ ...r, student_name: sec.decrypt(r.student_name), mobile: sec.decrypt(r.mobile), email: sec.decrypt(r.email), notes: sec.decrypt(r.notes) || '', mobile_verified: !!Number(r.mobile_verified), call_count: Number(r.call_count || 0), created_at: new Date(r.created_at).toISOString(), updated_at: new Date(r.updated_at).toISOString() });
+const norm = (r) => r && ({ ...r, student_name: sec.decrypt(r.student_name), mobile: sec.decrypt(r.mobile), email: sec.decrypt(r.email), notes: sec.decrypt(r.notes) || '', mobile_verified: !!Number(r.mobile_verified), call_count: Number(r.call_count || 0), ai_attempts: Number(r.ai_attempts || 0), created_at: new Date(r.created_at).toISOString(), updated_at: new Date(r.updated_at).toISOString() });
 
 async function insertEnquiry(e) {
   const now = e.created_at || new Date().toISOString();
   const cols = ['student_name', 'mobile', 'email', 'city', 'region', 'programme_group', 'course', 'mobile_verified', 'level', 'programme', 'branch',
-    'status', 'notes', 'source', 'created_by_id', 'created_by_name', 'counsellor_id', 'counsellor_name', 'created_at', 'updated_at', 'mobile_hash'];
+    'status', 'notes', 'source', 'created_by_id', 'created_by_name', 'counsellor_id', 'counsellor_name', 'created_at', 'updated_at', 'mobile_hash',
+    'email_hash', 'dup_of', 'data_source', 'data_location'];
   const vals = [sec.encrypt(e.student_name), sec.encrypt(e.mobile), sec.encrypt(e.email || null), e.city, e.region, e.programme, e.course, e.mobile_verified ? 1 : 0, e.level, e.programme, e.branch || '',
-    e.status || 'New', sec.encrypt(e.notes || ''), e.source || 'web', e.created_by_id || null, e.created_by_name || null, e.counsellor_id || null, e.counsellor_name || null, now, now, sec.blind(e.mobile)];
+    e.status || 'New', sec.encrypt(e.notes || ''), e.source || 'web', e.created_by_id || null, e.created_by_name || null, e.counsellor_id || null, e.counsellor_name || null, now, now, sec.blind(e.mobile),
+    e.email ? sec.blind(e.email) : '-', null, e.data_source || null, e.data_location || null];
+  const same = await findSameStudent(e.mobile, e.email); if (same) vals[cols.indexOf('dup_of')] = same.dup_of || same.id;
   const ph = cols.map((_, i) => `$${i + 1}`).join(',');
   let id;
   if (usePg) id = (await pool.query(`INSERT INTO enquiries (${cols.join(',')}) VALUES (${ph}) RETURNING id`, vals)).rows[0].id;
@@ -138,7 +185,7 @@ async function findRecentDuplicate(mobile, course) {
   return norm(await get(`SELECT ${COLS} FROM enquiries WHERE mobile_hash = $1 AND course = $2 AND created_at >= $3 ORDER BY id DESC LIMIT 1`, [sec.blind(mobile), course, since]));
 }
 
-const SORTS = { caller: 'LOWER(COALESCE(caller_name,\'zzz\'))', next: 'COALESCE(next_action_date,\'9999\')', lastcall: 'COALESCE(last_call_at,\'\')', pushed: 'LOWER(COALESCE(created_by_name,\'\'))', counsellor: 'LOWER(COALESCE(counsellor_name,\'zzz\'))', date: 'created_at', name: 'LOWER(student_name)', programme: 'programme', branch: 'LOWER(COALESCE(branch,\'\'))', level: 'level', region: 'LOWER(COALESCE(region,\'\'))', city: 'LOWER(COALESCE(city,\'\'))', course: 'course', status: 'status' };
+const SORTS = { dup: 'COALESCE(dup_of, id)', caller: 'LOWER(COALESCE(caller_name,\'zzz\'))', next: 'COALESCE(next_action_date,\'9999\')', lastcall: 'COALESCE(last_call_at,\'\')', pushed: 'LOWER(COALESCE(created_by_name,\'\'))', counsellor: 'LOWER(COALESCE(counsellor_name,\'zzz\'))', date: 'created_at', name: 'LOWER(student_name)', programme: 'programme', branch: 'LOWER(COALESCE(branch,\'\'))', level: 'level', region: 'LOWER(COALESCE(region,\'\'))', city: 'LOWER(COALESCE(city,\'\'))', course: 'course', status: 'status' };
 function buildFilter(f = {}) {
   const where = [], params = [];
   const add = (clause, val) => { params.push(val); where.push(clause.replace('?', `$${params.length}`)); };
@@ -155,7 +202,11 @@ function buildFilter(f = {}) {
   if (f.caller === 'none') where.push('caller_id IS NULL');
   else if (f.caller) add('caller_id = ?', parseInt(f.caller, 10));
   if (f.scopeCaller) add('caller_id = ?', f.scopeCaller);
-  if (f.scopeUser) { params.push(f.scopeUser, f.scopeUser); where.push(`(created_by_id = $${params.length - 1} OR counsellor_id = $${params.length})`); }
+  if (f.scopeUser) {
+    params.push(f.scopeUser, f.scopeUser); const a = params.length;
+    const extra = (f.scopeCallers || []).map((id) => { params.push(id); return `$${params.length}`; });
+    where.push(`(created_by_id = $${a - 1} OR counsellor_id = $${a}${extra.length ? ` OR caller_id IN (${extra.join(',')})` : ''})`);
+  }
   if (f.verified === 'yes') where.push('mobile_verified = 1');
   // follow-ups (dates are IST calendar days 'YYYY-MM-DD')
   const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
@@ -164,6 +215,11 @@ function buildFilter(f = {}) {
   if (f.follow === 'upcoming') add('next_action_date > ?', today);
   if (f.follow === 'untouched') where.push("COALESCE(call_count,0) = 0 AND status = 'New'");
   if (f.follow === 'called') where.push('COALESCE(call_count,0) > 0');
+  if (f.follow === 'dups') where.push('(dup_of IS NOT NULL OR id IN (SELECT dup_of FROM enquiries WHERE dup_of IS NOT NULL))');
+  if (f.dataSource) add('data_source = ?', f.dataSource);
+  if (f.appStatus === 'any') where.push('app_status IS NOT NULL');
+  else if (f.appStatus) add('app_status = ?', f.appStatus);
+  if (f.scopeTeam) { params.push(f.scopeTeam, f.scopeTeam); where.push(`(created_by_id = $${params.length - 1} OR counsellor_id = $${params.length})`); }
   if (f.ids && f.ids.length) { const ph = f.ids.map((id) => { params.push(id); return `$${params.length}`; }); where.push(`id IN (${ph.join(',')})`); }
   if (f.verified === 'no') where.push('(mobile_verified = 0 OR mobile_verified IS NULL)');
   if (f.from) add('created_at >= ?', new Date(f.from + 'T00:00:00+05:30').toISOString());
@@ -178,7 +234,7 @@ async function listEnquiries(f = {}) {
   let rows = (await all(`SELECT ${COLS} FROM enquiries ${sql}`, params)).map(norm);
   if (f.q) {
     const q = String(f.q).toLowerCase().trim();
-    rows = rows.filter((r) => [r.student_name, r.mobile, r.email, r.ref_no, r.city].some((v) => String(v || '').toLowerCase().includes(q)));
+    rows = rows.filter((r) => [r.student_name, r.mobile, r.email, r.ref_no, r.city, r.data_source, r.data_location].some((v) => String(v || '').toLowerCase().includes(q)));
   }
   if (f.sort === 'name') {
     const dir = f.dir === 'asc' ? 1 : -1;
@@ -187,8 +243,10 @@ async function listEnquiries(f = {}) {
   return rows;
 }
 
-async function updateEnquiry(id, { status, notes, sms_status, counsellor_id, counsellor_name, next_action_date }) {
+async function updateEnquiry(id, { status, notes, sms_status, counsellor_id, counsellor_name, next_action_date, ...extra }) {
   const now = new Date().toISOString();
+  const OK = ['app_status', 'admission_type', 'dup_of', 'ai_attempts', 'ai_pending_at', 'ai_call_id', 'data_source', 'data_location'];
+  for (const [k, v] of Object.entries(extra)) if (OK.includes(k) && v !== undefined) await run(`UPDATE enquiries SET ${k} = $1 WHERE id = $2`, [v, id]);
   if (counsellor_id !== undefined) await run('UPDATE enquiries SET counsellor_id = $1, counsellor_name = $2, updated_at = $3 WHERE id = $4', [counsellor_id, counsellor_name || null, now, id]);
   if (next_action_date !== undefined) await run('UPDATE enquiries SET next_action_date = $1, updated_at = $2 WHERE id = $3', [next_action_date || null, now, id]);
   if (status !== undefined) await run('UPDATE enquiries SET status = $1, updated_at = $2 WHERE id = $3', [status, now, id]);
@@ -196,7 +254,12 @@ async function updateEnquiry(id, { status, notes, sms_status, counsellor_id, cou
   if (sms_status !== undefined) await run('UPDATE enquiries SET sms_status = $1 WHERE id = $2', [sms_status, id]);
   return norm(await get(`SELECT ${COLS} FROM enquiries WHERE id = $1`, [id]));
 }
-async function deleteEnquiry(id) { await run('DELETE FROM calls WHERE enquiry_id = $1', [id]); await run('DELETE FROM enquiries WHERE id = $1', [id]); }
+async function deleteEnquiry(id) {
+  await run('UPDATE enquiries SET dup_of = NULL WHERE dup_of = $1', [id]);
+  for (const t of ['calls', 'timeline']) await run(`DELETE FROM ${t} WHERE enquiry_id = $1`, [id]);
+  await run('DELETE FROM enquiries WHERE id = $1', [id]);
+  await relinkDuplicates();
+}
 
 // ---------- assignment & calls ----------
 // Calling assignment (separate from the data-entry counsellor)
@@ -242,18 +305,19 @@ async function bumpOtpAttempts(mobile) { await run('UPDATE otps SET attempts = a
 async function clearOtp(mobile) { await run("UPDATE otps SET code_hash = '', expires_at = 0 WHERE mobile = $1", [sec.blind(mobile)]); }
 
 // ---------- team (sub-admin) users ----------
-const normU = (u) => u && ({ id: u.id, name: u.name, username: u.username, mobile: sec.decrypt(u.mobile) || '', role: u.role, kind: u.kind === 'caller' ? 'caller' : 'counsellor', active: !!Number(u.active),
+const normU = (u) => u && ({ id: u.id, name: u.name, username: u.username, mobile: sec.decrypt(u.mobile) || '', role: u.role, kind: ['caller', 'ai'].includes(u.kind) ? u.kind : 'counsellor', parent_id: u.parent_id || null, active: !!Number(u.active),
   created_at: u.created_at && new Date(u.created_at).toISOString(), last_login: u.last_login ? new Date(u.last_login).toISOString() : null });
-async function createUser({ name, username, mobile, pass_hash, kind }) {
-  const now = new Date().toISOString(), k = kind === 'caller' ? 'caller' : 'counsellor';
-  if (usePg) return normU((await pool.query('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *', [name, username, sec.encrypt(mobile), pass_hash, now, k])).rows[0]);
-  const id = sqlite.prepare('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind) VALUES (?,?,?,?,?,?)').run(name, username, sec.encrypt(mobile), pass_hash, now, k).lastInsertRowid;
+async function createUser({ name, username, mobile, pass_hash, kind, parent_id }) {
+  const now = new Date().toISOString(), k = ['caller', 'ai'].includes(kind) ? kind : 'counsellor';
+  if (usePg) return normU((await pool.query('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind, parent_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [name, username, sec.encrypt(mobile), pass_hash, now, k, parent_id || null])).rows[0]);
+  const id = sqlite.prepare('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind, parent_id) VALUES (?,?,?,?,?,?,?)').run(name, username, sec.encrypt(mobile), pass_hash, now, k, parent_id || null).lastInsertRowid;
   return getUser(id);
 }
 async function getUser(id) { return normU(await get('SELECT * FROM users WHERE id = $1', [id])); }
 async function getUserAuth(username) { return get('SELECT * FROM users WHERE LOWER(username) = LOWER($1)', [username]); }
 async function listUsers() { return (await all('SELECT * FROM users ORDER BY active DESC, name ASC')).map(normU); }
-async function updateUser(id, { name, mobile, active, pass_hash }) {
+async function updateUser(id, { name, mobile, active, pass_hash, parent_id }) {
+  if (parent_id !== undefined) await run('UPDATE users SET parent_id = $1 WHERE id = $2', [parent_id || null, id]);
   if (name !== undefined) await run('UPDATE users SET name = $1 WHERE id = $2', [name, id]);
   if (mobile !== undefined) await run('UPDATE users SET mobile = $1 WHERE id = $2', [sec.encrypt(mobile), id]);
   if (active !== undefined) await run('UPDATE users SET active = $1 WHERE id = $2', [active ? 1 : 0, id]);
@@ -288,4 +352,24 @@ async function setSetting(key, value) {
 // Raw rows exactly as stored (used by the Security tab to prove data is encrypted at rest)
 async function rawSample(n = 3) { return all(`SELECT ref_no, student_name, mobile, email FROM enquiries ORDER BY id DESC LIMIT ${Math.min(10, n)}`); }
 
-module.exports = { latestFeedback, assignMany, logCall, listCalls, callStats, insertAudit, listAudit, countUnseenAlerts, markAlertsSeen, getSetting, setSetting, rawSample, getEnquiry, findExisting, createUser, getUser, getUserAuth, listUsers, updateUser, touchLogin, init, insertEnquiry, findRecentDuplicate, listEnquiries, updateEnquiry, deleteEnquiry, getOtp, saveOtp, bumpOtpAttempts, clearOtp, usePg };
+// ---------- timeline / applications / payments / files ----------
+async function addEvent(enquiry_id, actor, kind, text) { await run('INSERT INTO timeline (enquiry_id, at, actor, kind, text) VALUES ($1,$2,$3,$4,$5)', [enquiry_id, new Date().toISOString(), actor || null, kind, String(text || '').slice(0, 500)]); }
+async function listEvents(enquiry_id) { return all('SELECT * FROM timeline WHERE enquiry_id = $1 ORDER BY id DESC LIMIT 200', [enquiry_id]); }
+async function insertRow(table, obj) {
+  const cols = Object.keys(obj), vals = Object.values(obj), ph = cols.map((_, i) => `$${i + 1}`).join(',');
+  if (usePg) return (await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${ph}) RETURNING id`, vals)).rows[0].id;
+  return sqlite.prepare(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals).lastInsertRowid;
+}
+async function updateRow(table, id, obj) {
+  const cols = Object.keys(obj); if (!cols.length) return;
+  await run(`UPDATE ${table} SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(', ')} WHERE id = $${cols.length + 1}`, [...Object.values(obj), id]);
+}
+// Move everything from a duplicate entry to the first entry, then delete the duplicate
+async function mergeInto(keepId, dropId) {
+  for (const t of ['calls', 'applications', 'timeline']) await run(`UPDATE ${t} SET enquiry_id = $1 WHERE enquiry_id = $2`, [keepId, dropId]);
+  await run('UPDATE enquiries SET dup_of = $1 WHERE dup_of = $2', [keepId, dropId]);
+  await run('DELETE FROM enquiries WHERE id = $1', [dropId]);
+  await run('UPDATE enquiries SET call_count = (SELECT COUNT(*) FROM calls WHERE enquiry_id = $1) WHERE id = $2', [keepId, keepId]);
+}
+
+module.exports = { all, get, run, addEvent, listEvents, insertRow, updateRow, mergeInto, relinkDuplicates, findSameStudent, latestFeedback, assignMany, logCall, listCalls, callStats, insertAudit, listAudit, countUnseenAlerts, markAlertsSeen, getSetting, setSetting, rawSample, getEnquiry, findExisting, createUser, getUser, getUserAuth, listUsers, updateUser, touchLogin, init, insertEnquiry, findRecentDuplicate, listEnquiries, updateEnquiry, deleteEnquiry, getOtp, saveOtp, bumpOtpAttempts, clearOtp, usePg };
