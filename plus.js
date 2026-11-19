@@ -75,7 +75,7 @@ module.exports = function plus(app, C) {
     const group = (await db.all('SELECT id, ref_no, created_by_name, counsellor_name, created_at, course, status FROM enquiries WHERE id = $1 OR dup_of = $1 ORDER BY id', [firstId]));
     if (group.length > 1) dup = { first: firstId, list: group.map((g) => ({ id: g.id, ref: g.ref_no, by: g.created_by_name || 'Website / QR', course: g.course, status: g.status, at: new Date(g.created_at).toISOString() })) };
     const fee = tuitionFee(row.level, row.programme, row.branch);
-    res.json({ provisionalFee: (await admSettings()).provisionalFee, row: view(req.user, row), calls, events: events.map((e) => ({ ...e, at: new Date(e.at).toISOString() })), apps, dup, fee, feeYear: FEE_YEAR,
+    res.json({ outcomes: C.CALL_OUTCOMES, statuses: C.STATUSES, provisionalFee: (await admSettings()).provisionalFee, row: view(req.user, row), calls, events: events.map((e) => ({ ...e, at: new Date(e.at).toISOString() })), apps, dup, fee, feeYear: FEE_YEAR,
       canDial: await canDial(req.user, row), emailReady: !!row.email && (await studentEmailReady()), hasEmail: !!row.email, me: { role: req.user.role, name: actorName(req.user) } });
   });
   // WhatsApp (opens the sender's own WhatsApp with the text ready) — the number is released only for allowed users
@@ -86,6 +86,33 @@ module.exports = function plus(app, C) {
     await db.addEvent(row.id, actorName(req.user), 'whatsapp', `WhatsApp: ${String(req.body.template || 'message')}`);
     audit(req, 'whatsapp_opened', `${row.ref_no} · ${req.body.template || 'message'}`, 'info');
     res.json({ url: `https://wa.me/91${row.mobile}?text=${encodeURIComponent(text)}` });
+  });
+  // One-tap calling: normal phone call or WhatsApp call. The number is released only to allowed users, rate-limited and audited.
+  const dialCount = new Map();
+  app.post('/api/student/:id/dial', requireAny, C.requireXhr, async (req, res) => {
+    const row = await loadRow(req, res); if (!row) return;
+    if (!(await canDial(req.user, row))) { audit(req, 'dial_denied', row.ref_no, 'medium'); return res.status(403).json({ error: 'You can call only students assigned to you for calling. Ask the admin.' }); }
+    const key = actorName(req.user), hour = Math.floor(Date.now() / 3600e3), c = dialCount.get(key);
+    const n = c && c.hour === hour ? c.n + 1 : 1; dialCount.set(key, { hour, n });
+    if (n > 80 && req.user.role !== 'admin') { audit(req, 'dial_limit', `${key}: ${n} numbers in an hour`, 'high'); return res.status(429).json({ error: 'Too many numbers opened in one hour. Please wait.' }); }
+    const channel = req.body.channel === 'whatsapp' ? 'whatsapp' : 'phone';
+    audit(req, channel === 'whatsapp' ? 'whatsapp_call_started' : 'phone_call_started', row.ref_no, 'info');
+    res.json({ tel: `tel:+91${row.mobile}`, wa: `https://wa.me/91${row.mobile}`, channel });
+  });
+  // Log the result of a call (phone / WhatsApp) from the student panel — works for admin, counsellors and callers
+  app.post('/api/student/:id/call', requireAny, C.requireXhr, async (req, res) => {
+    const row = await loadRow(req, res); if (!row) return;
+    const b = req.body || {};
+    if (!C.CALL_OUTCOMES.includes(b.outcome)) return res.status(400).json({ error: 'Choose the call result.' });
+    if (b.status && !C.STATUSES.includes(b.status)) return res.status(400).json({ error: 'Invalid status' });
+    const next = C.validDate(b.next_action_date);
+    const channel = b.channel === 'whatsapp' ? 'whatsapp' : 'call';
+    await db.logCall({ enquiry_id: row.id, user_id: req.user.id || null, user_name: actorName(req.user), channel, outcome: b.outcome, feedback: String(b.feedback || '').slice(0, 600), status_after: b.status || row.status, next_action_date: next });
+    const upd = { next_action_date: next }; if (b.status && b.status !== row.status) upd.status = b.status;
+    await db.updateEnquiry(row.id, upd);
+    await db.addEvent(row.id, actorName(req.user), 'call', `${channel === 'whatsapp' ? 'WhatsApp call' : 'Call'}: ${b.outcome}${upd.status ? ' · status → ' + upd.status : ''}`);
+    audit(req, 'call_logged', `${row.ref_no}: ${b.outcome}`, 'info');
+    res.json({ ok: true });
   });
   app.post('/api/student/:id/email', requireAny, C.requireXhr, async (req, res) => {
     const row = await loadRow(req, res); if (!row) return;
@@ -185,6 +212,7 @@ module.exports = function plus(app, C) {
   const admSettings = async () => ({ ...DEF_SETTINGS, ...(await db.getSetting('admission_settings', {})) });
   const razor = () => (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET ? { key: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET } : null);
   app.get('/api/admin/admission-settings', C.requireAdmin, async (_req, res) => res.json({ settings: await admSettings(), razorpay: !!razor(), emailReady: await studentEmailReady(),
+    whatsappApi: !!(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID), aiReady: provider() !== 'none',
     relaySecret: !!process.env.MAIL_WEBHOOK_SECRET, feeYear: FEE_YEAR, feeTable: FEE_TABLE }));
   app.put('/api/admin/admission-settings', C.requireAdmin, C.requireXhr, async (req, res) => {
     const b = req.body || {}, cur = await admSettings(), s = { ...cur };

@@ -201,6 +201,7 @@
     if (due > 0) { const first = $('#ptabs button.on') || $('#ptabs button'); first.classList.add('on'); payBody(first.dataset.m, due); }
   }
   const contact = () => { const c = ST.counsellor; const list = c ? [c] : ST.contacts; return `<p class="muted small help">Need help? ${list.map((x) => `<a href="https://wa.me/91${x.phone}" target="_blank" rel="noopener">💬 ${esc(x.name)} (${x.phone})</a>`).join(' · ')}</p>`; };
+  $('#pay').addEventListener('click', async (e) => { const c = e.target.closest('.cp'); if (!c) return; try { await navigator.clipboard.writeText(c.dataset.cp); toast('Copied ✓'); } catch { prompt('Copy', c.dataset.cp); } });
   $('#pay').addEventListener('click', (e) => { const b = e.target.closest('#ptabs button'); if (!b) return; $('#ptabs').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); payBody(b.dataset.m, ST.app.fee - ST.app.paid); });
   function refForm(mode, label, needRef) {
     return `<form class="pform" data-mode="${esc(mode)}"><div class="grid"><label class="fld third"><span>Amount paid (₹) <i>*</i></span><input name="amount" inputmode="numeric" value="${ST.app.fee - ST.app.paid}"></label>
@@ -217,7 +218,9 @@
         ${link.uri ? `<a class="btn wa mob" href="${esc(link.uri)}">📱 Open UPI app</a>` : ''}<p class="small muted">After paying, enter the 12-digit UPI reference (UTR) below.</p></div></div>${refForm('UPI', 'UPI reference / UTR', true)}`;
     }
     if (m === 'bank') el.innerHTML = `<table class="bank"><tr><td>Account name</td><td><b>${esc(p.bank.accountName)}</b></td></tr><tr><td>Bank</td><td>${esc(p.bank.bankName)}${p.bank.branch ? ', ' + esc(p.bank.branch) : ''}</td></tr>
-      <tr><td>Account number</td><td><b>${esc(p.bank.accountNo)}</b></td></tr><tr><td>IFSC</td><td><b>${esc(p.bank.ifsc)}</b></td></tr><tr><td>Remarks</td><td>${esc(ST.app.app_no || '')}</td></tr></table>${refForm('Bank transfer (NEFT / RTGS / IMPS)', 'UTR / transaction number', true)}`;
+      <tr><td>Account number</td><td><b>${esc(p.bank.accountNo)}</b> <button type="button" class="cp" data-cp="${esc(p.bank.accountNo)}">Copy</button></td></tr><tr><td>IFSC</td><td><b>${esc(p.bank.ifsc)}</b> <button type="button" class="cp" data-cp="${esc(p.bank.ifsc)}">Copy</button></td></tr>
+      <tr><td>Amount</td><td><b>${inr(due)}</b></td></tr><tr><td>Remarks / narration</td><td><b>${esc(ST.app.app_no || '')}</b> <button type="button" class="cp" data-cp="${esc(ST.app.app_no || '')}">Copy</button></td></tr></table>
+      <p class="small muted">Use NEFT / RTGS / IMPS from your bank app, then enter the UTR (transaction number) below.</p>${refForm('Bank transfer (NEFT / RTGS / IMPS)', 'UTR / transaction number', true)}`;
     if (m === 'campus') el.innerHTML = `<p>${esc(p.campus || 'Pay at the Admission Office.')}</p><p class="small muted">Carry your application number <b>${esc(ST.app.app_no || '')}</b>. Your receipt is given at the counter.</p>${refForm('At campus (cash / DD / cheque)', '', false)}`;
   }
   $('#pay').addEventListener('submit', async (e) => {

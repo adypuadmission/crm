@@ -764,6 +764,13 @@
   async function loadAdmSettings() {
     const j = await api('/api/admin/admission-settings'), f = $('#admSet');
     Object.entries(j.settings).forEach(([k, v]) => { const el = f.elements[k]; if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v ?? ''; });
+    const S2 = j.settings, item = (ok, t, hint) => `<li class="${ok ? 'ok' : 'todo'}"><span>${ok ? '✅' : '⚠'}</span><div><b>${t}</b>${hint ? `<small>${hint}</small>` : ''}</div></li>`;
+    $('#payReady').innerHTML = item(!!S2.accountNo && !!S2.ifsc, 'Bank account for transfers', S2.accountNo ? `${esc(S2.bankName || '')} · A/c ending ${esc(String(S2.accountNo).slice(-4))} · ${esc(S2.ifsc)}` : 'Fill bank name, account name, number and IFSC below')
+      + item(!!S2.upiId, 'UPI QR code', S2.upiId ? esc(S2.upiId) : 'Add the university UPI ID to show a scan-and-pay QR')
+      + item(!!S2.provisionalFee, 'Provisional admission fee', S2.provisionalFee ? '₹' + Number(S2.provisionalFee).toLocaleString('en-IN') : 'Set the amount')
+      + item(j.emailReady, 'Email the form link to students', j.emailReady ? 'Working' : 'Approve the Google mailer once (see the box on the right)')
+      + item(j.razorpay, 'Online card / net-banking (optional)', j.razorpay ? 'Razorpay connected' : 'Needs a Razorpay account — UPI, bank and campus work without it')
+      + item(true, 'Pay at campus', 'Always available — record it with 💵 Record payment');
     $('#rzpState').textContent = j.razorpay ? '✅ Razorpay keys set' : '(add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET on Render to activate)';
     $('#mailState').textContent = j.emailReady ? '🟢 Ready' : '⚪ Not set up'; $('#mailState').className = 'ai-state ' + (j.emailReady ? 'on' : '');
     $('#mailSetup').innerHTML = j.emailReady ? '<p class="small">✅ Student emails are working. Form links and messages go from the admission Gmail; replies go to the reply-to address. (A free Gmail account can send about 100 emails a day.)</p>'

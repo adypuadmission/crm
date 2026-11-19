@@ -71,3 +71,4 @@ h3.sub{grid-column:1/-1;margin:14px 0 2px;font-size:14px;color:#9A3412;border-bo
 @media (max-width:640px){.grid{grid-template-columns:1fr 1fr}.fld.half,.fld.full{grid-column:span 2}.fld.third{grid-column:span 1}.hero-fee{text-align:left;width:100%}.aw{padding:12px}.card{padding:16px}
   .nav .btn{padding:11px 12px}}
 @media (max-width:400px){.fld.third{grid-column:span 2}}
+.cp{border:1px solid var(--line);background:#fff;border-radius:7px;padding:2px 8px;font:inherit;font-size:12px;font-weight:700;cursor:pointer;color:var(--navy);margin-left:6px}

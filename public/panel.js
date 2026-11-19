@@ -42,8 +42,20 @@
     document.body.insertAdjacentHTML('beforeend', `<div class="modal" id="spModal" hidden><div class="modal-box wide sp-box">
       <header class="modal-h"><div class="sp-head" id="spHead"></div><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
       <div class="modal-b sp-body"><div id="spDup"></div>
-        <div class="sp-actions"><button class="btn wa" data-act="whatsapp" type="button">💬 WhatsApp</button><button class="btn ghost" data-act="email" type="button">✉️ Email</button>
-          <button class="btn primary" data-act="form" type="button">🎓 Admission form</button><button class="btn ghost" data-act="note" type="button">📝 Note</button></div>
+        <div class="sp-next" id="spNext" hidden></div>
+        <div class="sp-actions">
+          <button class="btn call" data-act="dial-phone" type="button" title="Phone call from your mobile">📞 Call</button>
+          <button class="btn wa" data-act="dial-wa" type="button" title="Opens WhatsApp — tap the call icon there">📲 WhatsApp call</button>
+          <button class="btn ghost" data-act="whatsapp" type="button">💬 WhatsApp message</button><button class="btn ghost" data-act="email" type="button">✉️ Email</button>
+          <button class="btn primary" data-act="form" type="button">🎓 Admission form</button><button class="btn ghost" data-act="log" type="button">✍️ Log call</button><button class="btn ghost" data-act="note" type="button">📝 Note</button></div>
+        <div class="sp-pane" id="spCall" hidden>
+          <b>✍️ How did the call go?</b> <span class="small muted" id="spCallVia"></span>
+          <div class="chips-o" id="spOut"></div>
+          <div class="two"><label class="lab">Status after the call<select id="spSt"></select></label>
+            <label class="lab">Next follow-up<input type="date" id="spNextDate"><span class="qd"><button type="button" data-d="1">Tomorrow</button><button type="button" data-d="3">3 days</button><button type="button" data-d="7">1 week</button><button type="button" data-d="">None</button></span></label></div>
+          <label class="lab">What did the student say? <textarea id="spFb" rows="2" maxlength="600" placeholder="e.g. Interested in AI & DS, will visit on Saturday with father"></textarea></label>
+          <div class="sp-row"><span></span><button class="btn primary" id="spCallSave" type="button">Save call result</button></div>
+        </div>
         <div class="sp-pane" id="spCompose" hidden>
           <div class="tpl" id="spTpl"></div>
           <label class="lab" id="spSubjWrap">Subject<input id="spSubj" maxlength="140"></label>
@@ -59,6 +71,14 @@
     m.addEventListener('click', onClick);
     $('#spTpl').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) useTpl(b.dataset.t); });
     $('#spSend').addEventListener('click', send);
+    $('#spOut').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; $('#spOut').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); CALL.outcome = b.dataset.o;
+      if (['Not picked', 'Busy', 'Switched off', 'Not reachable', 'Call back later'].includes(b.dataset.o) && !$('#spNextDate').value) $('#spNextDate').value = plusDays(1); });
+    $('#spCall').addEventListener('click', (e) => { const b = e.target.closest('.qd button'); if (b) $('#spNextDate').value = b.dataset.d ? plusDays(+b.dataset.d) : ''; });
+    $('#spCallSave').addEventListener('click', async () => {
+      if (!CALL.outcome) return toast('Choose how the call went');
+      const j = await api(`/api/student/${S.row.id}/call`, { method: 'POST', body: JSON.stringify({ outcome: CALL.outcome, channel: CALL.channel, status: $('#spSt').value, next_action_date: $('#spNextDate').value, feedback: $('#spFb').value }) });
+      if (!j.ok) return toast(j.error || 'Could not save'); toast('✅ Call result saved'); showPane(null); reload();
+    });
     $('#spNoteSave').addEventListener('click', async () => {
       const j = await api(`/api/student/${S.row.id}/note`, { method: 'POST', body: JSON.stringify({ text: $('#spNoteTxt').value }) });
       if (!j.ok) return toast(j.error || 'Could not save'); $('#spNoteTxt').value = ''; toast('Note saved'); reload();
@@ -75,7 +95,45 @@
     $('#spTpl').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.t === key));
     $('#spSubj').value = fill(t[2]); $('#spMsg').value = fill(t[3]); $('#spMsg').dataset.tpl = key;
   }
-  function showPane(p) { ['spCompose', 'spForm', 'spNote'].forEach((id) => { $('#' + id).hidden = id !== p; }); }
+  const CALL = { outcome: null, channel: 'call' };
+  const plusDays = (n) => new Date(Date.now() + 5.5 * 3600e3 + n * 864e5).toISOString().slice(0, 10);
+  function openCallLog(channel) {
+    CALL.outcome = null; CALL.channel = channel;
+    $('#spCallVia').textContent = channel === 'whatsapp' ? 'via WhatsApp call' : 'via phone';
+    $('#spOut').innerHTML = (S.outcomes || []).map((o) => `<button type="button" data-o="${esc(o)}">${{ Connected: '✅', 'Not picked': '📵', Busy: '⏳', 'Switched off': '📴', 'Not reachable': '🚫', 'Wrong number': '❌', 'Call back later': '🔁' }[o] || '•'} ${esc(o)}</button>`).join('');
+    $('#spSt').innerHTML = (S.statuses || []).map((x) => `<option ${x === S.row.status ? 'selected' : ''}>${esc(x)}</option>`).join('');
+    $('#spNextDate').value = ''; $('#spFb').value = '';
+    showPane('spCall');
+  }
+  // 👉 the one most useful next action for this student
+  function nextStep() {
+    const r = S.row, open = S.apps.find((a) => !['Cancelled'].includes(a.status)), t = plusDays(0);
+    const due = r.next_action_date && r.next_action_date <= t && !['Admitted', 'Not Interested'].includes(r.status) ? (r.next_action_date < t ? '⏰ Follow-up overdue · ' : '⏰ Follow-up due today · ') : '';
+    if (r.status === 'Not Interested') return null;
+    if (r.status === 'Admitted') return ['🎉', 'Admission confirmed — send a welcome message', 'wa:welcome'];
+    if (open && open.payments.some((p) => p.status === 'Pending verification')) return ['💳', S.me.role === 'admin' ? 'Payment submitted — verify it in the Admissions tab' : 'Payment submitted — the admin will verify it', null];
+    if (open && open.submitted_at && open.paid < open.fee) return ['💳', due + 'Form submitted — remind about the admission fee', 'wa:fee'];
+    if (open && !open.submitted_at) return ['⏰', due + `Form ${open.status === 'Opened' ? 'opened but not submitted' : 'sent'} — remind the student to fill it`, 'wa:form'];
+    if (['Interested', 'Counselling Done', 'Form Sent'].includes(r.status)) return ['🎓', due + 'Student is interested — send the admission form', 'form'];
+    if (['Not picked', 'Switched off', 'Not reachable', 'Busy'].includes(r.last_call_outcome)) return ['📵', due + `Last call: ${r.last_call_outcome} — try again or send a WhatsApp`, 'wa:missed'];
+    if (!r.call_count) return ['📞', due + 'Not called yet — call the student now', 'dial-phone'];
+    return ['📚', due + 'Share programme & fee details', 'wa:details'];
+  }
+  function renderNext() {
+    const n = nextStep(), el = $('#spNext');
+    if (!n) { el.hidden = true; return; }
+    el.hidden = false;
+    el.innerHTML = `<span class="sp-next-i">${n[0]}</span><div><small>Suggested next step</small><b>${esc(n[1])}</b></div>${n[2] ? `<button class="btn primary xs" data-act="next" data-go="${esc(n[2])}" type="button">Do it →</button>` : ''}`;
+  }
+  async function dial(channel) {
+    const w = channel === 'whatsapp' ? window.open('about:blank', '_blank') : null;
+    const j = await api(`/api/student/${S.row.id}/dial`, { method: 'POST', body: JSON.stringify({ channel }) });
+    if (!j.tel) { if (w) w.close(); return toast(j.error || 'Not allowed'); }
+    if (channel === 'whatsapp') { if (w) w.location = j.wa; else window.open(j.wa, '_blank'); toast('📲 WhatsApp opened — tap the 📞 call icon there. Log the result here after the call.'); }
+    else { location.href = j.tel; toast('📞 Calling… log the result here after the call'); }
+    openCallLog(channel === 'whatsapp' ? 'whatsapp' : 'call');
+  }
+  function showPane(p) { ['spCompose', 'spForm', 'spNote', 'spCall'].forEach((id) => { $('#' + id).hidden = id !== p; }); }
   async function onClick(e) {
     if (e.target.matches('[data-close]') || e.target === $('#spModal')) { $('#spModal').hidden = true; if (OPTS.onClose) OPTS.onClose(); return; }
     const act = e.target.closest('[data-act]'); if (act) {
@@ -92,6 +150,12 @@
         return;
       }
       if (a === 'note') { showPane('spNote'); $('#spNoteTxt').focus(); return; }
+      if (a === 'dial-phone') return dial('phone');
+      if (a === 'dial-wa') return dial('whatsapp');
+      if (a === 'log') return openCallLog('call');
+      if (a === 'next') { const g = act.dataset.go;
+        if (g.startsWith('wa:')) { $('#spModal').querySelector('[data-act=whatsapp]').click(); useTpl(g.slice(3)); return; }
+        return $('#spModal').querySelector(`[data-act=${g}]`).click(); }
       if (a === 'form') { showPane('spForm'); renderForm(); return; }
       if (a === 'mk-form') return makeForm(act);
       if (a === 'copy') { try { await navigator.clipboard.writeText(act.dataset.link); toast('Link copied ✓'); } catch { prompt('Copy this link', act.dataset.link); } return; }
@@ -173,12 +237,13 @@
   }
   async function reload() {
     const j = await api(`/api/student/${S.row.id}`); if (!j.row) return toast(j.error || 'Not found');
-    S = j; renderHead(); renderApps(); renderTimeline(); if (OPTS.onChange) OPTS.onChange(j.row);
+    S = j; renderHead(); renderNext(); renderApps(); renderTimeline(); if (OPTS.onChange) OPTS.onChange(j.row);
   }
   async function open(id, opts = {}) {
     shell(); OPTS = opts; showPane(null);
     const j = await api(`/api/student/${id}`); if (!j.row) return toast(j.error || 'Not found');
-    S = j; renderHead(); renderApps(); renderTimeline(); $('#spModal').hidden = false;
+    S = j; renderHead(); renderNext(); renderApps(); renderTimeline(); $('#spModal').hidden = false;
+    $('#spModal').querySelectorAll('[data-act=dial-phone],[data-act=dial-wa]').forEach((b) => { b.disabled = !S.canDial; b.title = S.canDial ? b.title : 'Only for students assigned to you for calling'; });
     if (opts.pane === 'form') { showPane('spForm'); renderForm(); }
   }
   window.StudentPanel = { open };
