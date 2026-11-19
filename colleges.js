@@ -40,7 +40,7 @@ module.exports = function colleges(app, C) {
   // run a job (AI caller, daily summary …) for ADYPU and then for every active college
   async function forEachCollege(fn) {
     try { await fn(); } catch (e) { console.error('job', e.message); }
-    if (!db.usePg()) return;
+    if (!(typeof db.usePg === 'function' ? db.usePg() : db.usePg)) return;
     for (const r of await db.registry.all().catch(() => [])) {
       if (r.status !== 'active') continue;
       try { const ctx = await load(r.slug); await tenant.als.run(ctx, fn); } catch (e) { console.error('job', r.slug, e.message); }
