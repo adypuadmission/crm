@@ -19,6 +19,7 @@
   </nav>
   <div class="tb-actions">
     <span class="sms-pill" id="smsPill" title="SMS provider"></span>
+    <a class="btn ghost" id="platformLink" href="/platform" title="All colleges on this platform">🏫 All colleges</a>
     <a class="btn ghost" href="/qr-poster.pdf" target="_blank" rel="noopener" title="Printable QR poster for the enquiry form">📱 QR poster</a>
     <a class="btn ghost" href="/" target="_blank" rel="noopener">View form ↗</a>
     <span class="admin-chip" id="adminChip" title="Main admin">👤 Main Admin</span>
@@ -285,6 +286,8 @@
       </article>
       <article class="card">
         <header class="ch"><div><b>🔑 Access control</b><small>Only you (main admin) can see full numbers and download data</small></div></header>
+        <label class="switch-row"><span class="lock-ic">🔒</span><span><b>Lock a staff account automatically</b><small>After this many copy / screenshot / print attempts within 1 hour, the counsellor or caller is signed out and locked. You get an alert and can unlock them in the Team tab.</small>
+          <select id="autoLock"><option value="3">after 3 attempts</option><option value="5">after 5 attempts</option><option value="10">after 10 attempts</option><option value="0">never (only report)</option></select></span></label>
         <label class="switch-row"><input type="checkbox" id="allowReveal"><span><b>Let counsellors call / WhatsApp their own students directly</b><small>Off = counsellors only ever see 98XXXXXX10 (students still get the counsellor's WhatsApp number and can message first). When on, each call/chat is logged and you get an alert.</small></span></label>
         <label class="switch-row"><input type="checkbox" id="otpRequired"><span><b>Students must verify their mobile with an OTP</b><small>Off = students submit the form without an OTP (no OTP SMS is sent). Turn on again once cheaper OTP SMS / WhatsApp is ready.</small></span></label>
         <label class="switch-row"><input type="checkbox" id="studentMsgs"><span><b>Send confirmation SMS / WhatsApp to students</b><small>Off = no message is sent to students after they enquire (no SMS cost). Turn on once the official SMS pack / WhatsApp is ready.</small></span></label>

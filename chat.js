@@ -1,7 +1,7 @@
 // "Ask ADYPU" chatbot. Works offline from the knowledge base below (facts taken from adypu.edu.in).
 // If ANTHROPIC_API_KEY is set, questions are answered by Claude, grounded on the same knowledge base
 // and told not to invent facts. Keep this file updated when university details change.
-const { LEVELS, ENGINEERING_BRANCHES, FEE_TABLE, FEE_YEAR } = require('./courses');
+const { LEVELS, ENGINEERING_BRANCHES, FEE_TABLE, feeYear } = require('./courses');
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 const normP = (x) => String(x).toLowerCase().replace(/[^a-z]/g, '');
 function feeReply(t) {
@@ -10,9 +10,9 @@ function feeReply(t) {
   const progs = [...new Set(FEE_TABLE.map((r) => r.programme))].filter((p) => { const k = words(p); return q.includes(` ${k} `) || (k.length > 4 && qc.includes(k.replace(/ /g, ''))) || (k === 'law' && /\b(llb|law)\b/.test(q)) || (/hospitality|tourism/.test(k) && /\b(hotel|hospitality|tourism|culinary)\b/.test(q)) || (k === 'ma psychology' && /\bma\b.*psycholog/.test(q)); })
     .filter((p, _, all) => !(all.some((x) => /hospitality/i.test(x)) && /^B\.Sc$|^M\.Sc Physics$/.test(p) && /\b(hotel|hospitality|tourism)\b/.test(q)));
   const rows = progs.length ? FEE_TABLE.filter((r) => progs.includes(r.programme)) : [];
-  if (rows.length) return `Annual tuition fees (${FEE_YEAR}):\n` + rows.map((r) => `• ${r.programme}${r.branch ? ' – ' + r.branch : ''}: **${inr(r.fee)}**`).join('\n') + '\n\nHostel, exam and other charges are extra. The admissions team will confirm the full fee and any scholarship.';
+  if (rows.length) return `Annual tuition fees (${feeYear()}):\n` + rows.map((r) => `• ${r.programme}${r.branch ? ' – ' + r.branch : ''}: **${inr(r.fee)}**`).join('\n') + '\n\nHostel, exam and other charges are extra. The admissions team will confirm the full fee and any scholarship.';
   const by = {}; FEE_TABLE.forEach((r) => { by[r.programme] = by[r.programme] || []; by[r.programme].push(r.fee); });
-  return `Annual tuition fees (${FEE_YEAR}) start from:\n` + Object.entries(by).map(([p, f]) => `• ${p}: ${Math.min(...f) === Math.max(...f) ? inr(f[0]) : inr(Math.min(...f)) + ' – ' + inr(Math.max(...f))}`).join('\n') + '\n\nAsk e.g. "B.Tech fees" for each specialisation.';
+  return `Annual tuition fees (${feeYear()}) start from:\n` + Object.entries(by).map(([p, f]) => `• ${p}: ${Math.min(...f) === Math.max(...f) ? inr(f[0]) : inr(Math.min(...f)) + ' – ' + inr(Math.max(...f))}`).join('\n') + '\n\nAsk e.g. "B.Tech fees" for each specialisation.';
 }
 const COURSES = LEVELS;
 const CONTACTS = require('./contacts');
@@ -124,7 +124,26 @@ ${JSON.stringify({ ...KB, formProgrammes: COURSES, ugSpecialisations: '75+', cur
   campusLife: 'Impetus annual sports event; #TECH, Ablaze, Chatori Galli, Alchemy (Design), National Moot Court (Law); clubs; Wellness Centre; Incubator; Entrepreneurship & Innovation Centre',
   international: 'Partnerships with universities in the US, UK and Europe; immersion programmes; International Academic Council; Mid Sweden University delegation visit' })}`;
 
+// A college added through the platform: answer only from that college's own programmes, fees and contacts.
+function collegeAnswer(text) {
+  const t = require('./tenant').cur(), q = String(text || '').trim();
+  const contacts = (t.contacts || []).map((c) => `• **${c.name}:** ${fmtPh(c.phone)}`).join('\n') || (t.phone ? `• **Helpline:** ${fmtPh(t.phone)}` : '');
+  const more = `\n\nFor anything else, please call:\n${contacts}${t.email ? `\nor email **${t.email}**` : ''}`;
+  const chips = ['Programmes', 'Fees', 'How to apply', 'Contact numbers', 'Location', 'Request a call back'];
+  const fee = feeReply(q); if (fee) return { reply: fee, intent: 'fees', chips };
+  if (/^(hi+|hello|hey|namaste|namaskar|good (morning|afternoon|evening))[\s!.]*$/i.test(q)) return { reply: `Hello! 👋 Welcome to **${t.name}**. Ask me about programmes, fees or how to apply.`, intent: 'greet', chips };
+  if (/program|course|branch|degree|offer/i.test(q)) return { reply: `**${t.name}** offers:\n${['UG', 'PG'].map((lv) => (LEVELS[lv] || []).length ? `**${lv}:** ${LEVELS[lv].map((p) => p.name).join(', ')}` : '').filter(Boolean).join('\n')}\n\nAsk “fees for <programme>” to see the fee.`, intent: 'programmes', chips };
+  if (/fee|cost|charges/i.test(q)) return { reply: `Tell me the programme name (for example “${((LEVELS.UG || [])[0] || (LEVELS.PG || [])[0] || { name: 'MBA' }).name} fees”) and I will show the fee.`, intent: 'fees', chips };
+  if (/apply|admission|form|process/i.test(q)) return { reply: 'Fill the enquiry form on this page ✍️ — a counsellor will call you, share the online admission form and help you with fee payment.', intent: 'apply', chips };
+  if (/call ?back|call me/i.test(q)) return { reply: 'Sure! Fill the enquiry form on this page with your mobile number and a counsellor will call you back. 📞', intent: 'callback', chips };
+  if (/where|location|address|reach|map/i.test(q)) return { reply: `📍 ${t.address || t.city || t.name}`, intent: 'location', chips };
+  if (/thank|ok(ay)?\b|great|nice/i.test(q)) return { reply: 'You are welcome! All the best 🎓', intent: 'thanks', chips };
+  if (/contact|phone|number|call|email/i.test(q)) return { reply: `Contact us:\n${contacts}${t.email ? `\n• **Email:** ${t.email}` : ''}`, intent: 'contact', chips };
+  return { reply: `I don't have that detail.${more}`, intent: 'fallback', chips };
+}
+
 async function answer(text, history = []) {
+  if (require('./tenant').als.getStore()) return collegeAnswer(text);
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return ruleAnswer(text);
   try {

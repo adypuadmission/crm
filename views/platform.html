@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>All Colleges | Admission Platform</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin.css">
+<link rel="stylesheet" href="/platform.css">
+</head>
+<body class="pf">
+<header class="topbar">
+  <div class="tb-brand"><span class="crest sm">🏫</span><div><b>Admission Platform</b><small>All colleges in one place · <span id="liveClock"></span></small></div></div>
+  <div class="tb-actions">
+    <a class="btn ghost" href="/admin">← ADYPU dashboard</a>
+    <button class="btn primary" id="newCollege" type="button">➕ Create a college</button>
+    <button class="btn ghost" id="logout" type="button">Log out</button>
+  </div>
+</header>
+
+<main class="pf-main">
+  <section class="pf-kpis" id="kpis"></section>
+
+  <section class="pf-row">
+    <div class="card pf-insights"><header class="ch"><div><b>💡 Smart insights</b><small>What needs your attention across all colleges today</small></div></header><ul id="insights" class="pf-ins"></ul></div>
+    <div class="card pf-compare"><header class="ch"><div><b>📊 Compare colleges</b><small>Enquiries and admissions · conversion rate</small></div>
+      <select id="cmpBy" class="pf-sel" aria-label="Compare by"><option value="total">All enquiries</option><option value="week">Last 7 days</option><option value="admitted">Admitted</option><option value="collected">Fees collected</option></select></header>
+      <div id="compare" class="pf-bars"></div></div>
+  </section>
+
+  <section>
+    <div class="pf-head"><h2>🏫 College accounts</h2><input id="q" class="pf-search" type="search" placeholder="Search college…" aria-label="Search college"></div>
+    <div class="pf-grid" id="grid"><div class="muted">Loading…</div></div>
+  </section>
+</main>
+
+<!-- create / edit wizard -->
+<div class="modal" id="wiz" hidden>
+  <div class="modal-box pf-wiz" role="dialog" aria-modal="true" aria-labelledby="wizTitle">
+    <header class="modal-h"><b id="wizTitle">➕ Create a college</b><button class="icon" data-close type="button" aria-label="Close">✕</button></header>
+    <ol class="pf-steps" id="steps"><li class="on">1 · College</li><li>2 · Programmes</li><li>3 · Admin login</li><li>4 · Ready</li></ol>
+
+    <div class="pf-step" data-step="1">
+      <div class="pf-logo-row">
+        <label class="pf-logo" id="logoBox" title="Upload logo"><img id="logoImg" alt="" hidden><span id="logoPh">🖼️<small>Logo</small></span><input type="file" id="logoFile" accept="image/png,image/jpeg,image/webp" hidden></label>
+        <div class="pf-f2">
+          <label>College name *<input id="fName" maxlength="120" placeholder="e.g. SNBP College of Engineering"></label>
+          <label>Short code *<input id="fShort" maxlength="12" placeholder="e.g. SNBP"></label>
+        </div>
+      </div>
+      <div class="pf-f2">
+        <label>Link <small class="muted">(automatic)</small><div class="pf-link"><span id="linkPrefix"></span><input id="fSlug" maxlength="30" placeholder="snbp"></div></label>
+        <label>City<input id="fCity" maxlength="60" placeholder="Pune"></label>
+      </div>
+      <label>Address<input id="fAddress" maxlength="160" placeholder="Full address shown on forms and receipts"></label>
+      <div class="pf-f3">
+        <label>Email<input id="fEmail" type="email" maxlength="120" placeholder="admissions@college.edu.in"></label>
+        <label>Helpline mobile<input id="fPhone" inputmode="numeric" maxlength="10" placeholder="10 digits"></label>
+        <label>Website<input id="fWebsite" maxlength="120" placeholder="https://"></label>
+      </div>
+      <div class="pf-f3">
+        <label>Academic year<input id="fAY" maxlength="12" value="2027–28"></label>
+        <label>Fee note<input id="fFeeYear" maxlength="60" placeholder="AY 2027-28 (indicative)"></label>
+        <label>Theme colour<input id="fColor" type="color" value="#0B1F4B"></label>
+      </div>
+      <label>Tagline on the enquiry page<input id="fTagline" maxlength="200" placeholder="Fill the form — our counsellor will call you within 24 hours."></label>
+      <div class="pf-contacts"><b>Contact persons</b> <small class="muted">shown to students (up to 4)</small><div id="contacts"></div><button class="btn ghost xs" id="addContact" type="button">＋ Add contact</button></div>
+    </div>
+
+    <div class="pf-step" data-step="2" hidden>
+      <p class="muted small">Add programmes in any one way — then check and edit the list below.</p>
+      <div class="pf-import">
+        <label class="pf-imp"><input type="file" id="xlsFile" accept=".xlsx,.xls,.csv" hidden><b>📗 Upload Excel</b><small>Level · School · Programme · Specialisation · Fee</small></label>
+        <label class="pf-imp"><input type="file" id="pdfFile" accept="application/pdf" hidden><b>📕 Upload PDF</b><small>Fee structure / programme list</small></label>
+        <button class="pf-imp" id="typeBtn" type="button"><b>⌨️ Type or paste</b><small>One programme per line</small></button>
+        <a class="pf-imp" href="/api/platform/template.xlsx"><b>⬇ Excel template</b><small>Fill and upload</small></a>
+      </div>
+      <div id="typeBox" hidden>
+        <textarea id="typeText" rows="6" placeholder="School of Engineering&#10;B.Tech Computer Engineering 1,50,000&#10;B.Tech Mechanical Engineering 1,20,000&#10;School of Management&#10;MBA Finance 2,00,000&#10;BBA 1,00,000"></textarea>
+        <button class="btn primary xs" id="parseText" type="button">Read programmes</button>
+      </div>
+      <div class="pf-prog-head"><b id="progCount">0 programmes</b><span><button class="btn ghost xs" id="addRow" type="button">＋ Add row</button> <button class="btn ghost xs" id="clearRows" type="button">Clear</button></span></div>
+      <div class="pf-table-wrap"><table class="pf-table"><thead><tr><th>Level</th><th>School</th><th>Programme</th><th>Specialisation</th><th>Fee / year (₹)</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+    </div>
+
+    <div class="pf-step" data-step="3" hidden>
+      <p class="muted small">The college's own main admin. Login codes and security alerts go to this email. The admin can then create counsellors and callers.</p>
+      <div class="pf-f2">
+        <label>Admin name<input id="aName" maxlength="60" placeholder="Dr. …"></label>
+        <label>Admin email *<input id="aEmail" type="email" maxlength="120"></label>
+      </div>
+      <div class="pf-f3">
+        <label>Admin mobile<input id="aMobile" inputmode="numeric" maxlength="10"></label>
+        <label>Username *<input id="aUser" maxlength="30" value="admin"></label>
+        <label>Password <small class="muted">(blank = auto)</small><input id="aPass" type="password" maxlength="60" autocomplete="new-password"></label>
+      </div>
+      <div class="pf-note">🔒 This college gets its <b>own separate database</b>. Its students, team and payments never mix with ADYPU or any other college.</div>
+    </div>
+    <div class="pf-step" data-step="4" hidden><div id="done"></div></div>
+
+    <div class="pf-err" id="wizErr" role="alert"></div>
+    <footer class="pf-foot"><button class="btn ghost" id="back" type="button">← Back</button><button class="btn primary" id="next" type="button">Next →</button></footer>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<script src="/guard.js"></script>
+<script src="/platform/platform.js"></script>
+</body>
+</html>

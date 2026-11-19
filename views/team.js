@@ -1,7 +1,7 @@
 (() => {
   const $ = (s) => document.querySelector(s);
   const api = (url, opts = {}) => fetch(url, { ...opts, headers: { 'X-Requested-With': 'fetch', ...(opts.body && !(opts.body instanceof Blob) ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } })
-    .then(async (r) => { if (r.status === 401) { location.href = '/admin/login'; throw new Error('auth'); } const j = await r.json(); return { ok: r.ok, status: r.status, ...j }; });
+    .then(async (r) => { if (r.status === 401) { location.href = (window.__b || '') + '/admin/login'; throw new Error('auth'); } const j = await r.json(); return { ok: r.ok, status: r.status, ...j }; });
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   const istDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -257,7 +257,7 @@
 
   let t; $('#q').addEventListener('input', () => { clearTimeout(t); t = setTimeout(load, 300); });
   ['fStatus', 'from', 'to'].forEach((id) => $('#' + id).addEventListener('change', load));
-  $('#logout').addEventListener('click', async () => { await api('/api/admin/logout', { method: 'POST' }); location.href = '/admin/login'; });
+  $('#logout').addEventListener('click', async () => { await api('/api/admin/logout', { method: 'POST' }); location.href = (window.__b || '') + '/admin/login'; });
 
   (async () => {
     const j = await api('/api/team/me');
@@ -284,7 +284,7 @@
     // personal QR
     const link = `${location.origin}/?src=qr&ref=${encodeURIComponent(ME.username)}`;
     $('#myQr').src = '/qr.svg?ref=' + encodeURIComponent(ME.username);
-    $('#myPoster').href = '/qr-poster.pdf?ref=' + encodeURIComponent(ME.username);
+    $('#myPoster').href = (window.__b || '') + '/qr-poster.pdf?ref=' + encodeURIComponent(ME.username);
     $('#myLink').textContent = link;
     $('#waShare').href = 'https://wa.me/?text=' + encodeURIComponent(`Admissions 2027-28 at Ajeenkya DY Patil University, Pune. Enquire in 30 seconds: ${link}`);
     $('#copyLink').addEventListener('click', async () => { try { await navigator.clipboard.writeText(link); toast('Link copied ✓'); } catch { toast(link); } });

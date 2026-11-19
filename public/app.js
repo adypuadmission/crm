@@ -51,7 +51,7 @@
 
   if (REF) {
     $('#qrImg').src = '/qr.svg?ref=' + encodeURIComponent(REF);
-    $('#qrPoster').href = '/qr-poster.pdf?ref=' + encodeURIComponent(REF);
+    $('#qrPoster').href = (window.__b || '') + '/qr-poster.pdf?ref=' + encodeURIComponent(REF);
     fetch('/api/ref?u=' + encodeURIComponent(REF)).then((r) => r.json()).then((j) => {
       if (j.name) { const c = $('#refChip'); c.textContent = `🤝 Your counsellor: ${j.name}`; c.hidden = false; }
     }).catch(() => {});

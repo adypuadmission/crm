@@ -3,7 +3,8 @@
 const crypto = require('crypto');
 const path = require('path');
 const FORM = require('./appform');
-const { LEVELS, isValid, tuitionFee, FEE_YEAR, FEE_TABLE, courseLabel } = require('./courses');
+const tenant = require('./tenant');
+const { LEVELS, isValid, tuitionFee, feeYear, FEE_TABLE, courseLabel } = require('./courses');
 
 module.exports = function plus(app, C) {
   const { db, sec, audit } = C;
@@ -11,10 +12,10 @@ module.exports = function plus(app, C) {
   const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
   const rs = (n) => 'Rs. ' + Number(n || 0).toLocaleString('en-IN'); // the PDF font has no ₹ sign
   const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
-  const base = (req) => C.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  const base = (req) => C.siteUrl(req);
   const istDate = (iso) => new Date(iso).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
   const fmtIST = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-  const actorName = (u) => (u.role === 'admin' ? C.ADMIN_NAME : u.name);
+  const actorName = (u) => (u.role === 'admin' ? C.ADMIN_NAME() : u.name);
   const parseId = (v) => parseInt(v, 10) || 0;
 
   // admin OR team member (counsellor / caller)
@@ -53,7 +54,7 @@ module.exports = function plus(app, C) {
     const s = await db.getSetting('admission_settings', {});
     const safe = String(text).replace(/[<&>]/g, (c) => ({ '<': '&lt;', '&': '&amp;', '>': '&gt;' }[c])).replace(/(https?:\/\/\S+)/g, '<a href="$1">$1</a>').replace(/\n/g, '<br>');
     await C.getMailer().sendMail({ to: row.email, subject, text, name: fromName || 'ADYPU Admissions', replyTo: s.replyTo || undefined,
-      html: `<div style="font-family:Arial,sans-serif;max-width:600px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>Ajeenkya DY Patil University, Pune</b><div style="font-size:12px;color:#FFD8A8">Admissions ${C.ACADEMIC_YEAR}</div></div><div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px;font-size:14.5px;line-height:1.6;color:#0f172a">${safe}</div></div>` });
+      html: `<div style="font-family:Arial,sans-serif;max-width:600px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>Ajeenkya DY Patil University, Pune</b><div style="font-size:12px;color:#FFD8A8">Admissions ${C.ACADEMIC_YEAR()}</div></div><div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px;font-size:14.5px;line-height:1.6;color:#0f172a">${safe}</div></div>` });
   }
 
   // ---------- student panel ----------
@@ -75,7 +76,7 @@ module.exports = function plus(app, C) {
     const group = (await db.all('SELECT id, ref_no, created_by_name, counsellor_name, created_at, course, status FROM enquiries WHERE id = $1 OR dup_of = $1 ORDER BY id', [firstId]));
     if (group.length > 1) dup = { first: firstId, list: group.map((g) => ({ id: g.id, ref: g.ref_no, by: g.created_by_name || 'Website / QR', course: g.course, status: g.status, at: new Date(g.created_at).toISOString() })) };
     const fee = tuitionFee(row.level, row.programme, row.branch);
-    res.json({ outcomes: C.CALL_OUTCOMES, statuses: C.STATUSES, provisionalFee: (await admSettings()).provisionalFee, row: view(req.user, row), calls, events: events.map((e) => ({ ...e, at: new Date(e.at).toISOString() })), apps, dup, fee, feeYear: FEE_YEAR,
+    res.json({ outcomes: C.CALL_OUTCOMES, statuses: C.STATUSES, provisionalFee: (await admSettings()).provisionalFee, row: view(req.user, row), calls, events: events.map((e) => ({ ...e, at: new Date(e.at).toISOString() })), apps, dup, fee, feeYear: feeYear(),
       canDial: await canDial(req.user, row), emailReady: !!row.email && (await studentEmailReady()), hasEmail: !!row.email, me: { role: req.user.role, name: actorName(req.user) } });
   });
   // WhatsApp (opens the sender's own WhatsApp with the text ready) — the number is released only for allowed users
@@ -116,7 +117,7 @@ module.exports = function plus(app, C) {
   });
   app.post('/api/student/:id/email', requireAny, C.requireXhr, async (req, res) => {
     const row = await loadRow(req, res); if (!row) return;
-    const subject = C.clean(req.body.subject, 140) || `ADYPU Admissions ${C.ACADEMIC_YEAR}`, text = String(req.body.text || '').slice(0, 4000);
+    const subject = C.clean(req.body.subject, 140) || `ADYPU Admissions ${C.ACADEMIC_YEAR()}`, text = String(req.body.text || '').slice(0, 4000);
     if (text.trim().length < 5) return res.status(400).json({ error: 'Please write the message.' });
     try { await emailStudent(row, subject, text, req.user.role === 'admin' ? 'ADYPU Admissions' : `${req.user.name} · ADYPU Admissions`); }
     catch (e) { return res.status(400).json({ error: e.message.slice(0, 200) }); }
@@ -141,7 +142,7 @@ module.exports = function plus(app, C) {
     await db.updateEnquiry(keep.id, { status: best, notes, ...(keep.email ? {} : {}), ...(!keep.data_source && drop.data_source ? { data_source: drop.data_source, data_location: drop.data_location } : {}),
       ...(!keep.caller_id && drop.caller_id ? {} : {}) });
     if (!keep.caller_id && drop.caller_id) await db.assignMany([keep.id], { id: drop.caller_id, name: drop.caller_name });
-    await db.addEvent(keep.id, C.ADMIN_NAME, 'merge', `Merged duplicate ${drop.ref_no} (${drop.course}, added by ${drop.created_by_name || 'website'}) into this entry`);
+    await db.addEvent(keep.id, C.ADMIN_NAME(), 'merge', `Merged duplicate ${drop.ref_no} (${drop.course}, added by ${drop.created_by_name || 'website'}) into this entry`);
     await db.relinkDuplicates();
     audit(req, 'duplicate_merged', `${drop.ref_no} → ${keep.ref_no}`, 'medium');
     res.json({ ok: true, keep: keep.ref_no });
@@ -149,7 +150,7 @@ module.exports = function plus(app, C) {
   app.post('/api/admin/students/:id/not-duplicate', C.requireAdmin, C.requireXhr, async (req, res) => {
     const row = await db.getEnquiry(parseId(req.params.id)); if (!row) return res.status(404).json({ error: 'Not found' });
     await db.updateEnquiry(row.id, { dup_of: null }); await db.run("UPDATE enquiries SET email_hash = '-' WHERE id = $1 AND email_hash IS NOT NULL", [row.id]);
-    await db.addEvent(row.id, C.ADMIN_NAME, 'merge', 'Marked as not a duplicate'); res.json({ ok: true });
+    await db.addEvent(row.id, C.ADMIN_NAME(), 'merge', 'Marked as not a duplicate'); res.json({ ok: true });
   });
 
   // ---------- counsellor → own calling team ----------
@@ -167,7 +168,7 @@ module.exports = function plus(app, C) {
     const name = C.clean(req.body.name, 60), username = C.clean(req.body.username, 30).toLowerCase(), mobile = String(req.body.mobile || '').replace(/\D/g, '').slice(-10);
     const password = String(req.body.password || '') || C.genPassword();
     if (name.length < 2) return res.status(400).json({ error: 'Please enter the full name.' });
-    if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === C.ADMIN_USER.toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
+    if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === C.ADMIN_USER().toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
     if (!/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: 'Enter a 10-digit mobile number.' });
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
     if ((await myCallers(req.user)).length >= 25) return res.status(400).json({ error: 'You can have at most 25 callers. Ask the admin for more.' });
@@ -209,11 +210,11 @@ module.exports = function plus(app, C) {
   // ---------- admission settings ----------
   const DEF_SETTINGS = { provisionalFee: 25000, permanentMode: 'tuition', permanentFee: 0, upiId: '', payee: 'Ajeenkya DY Patil University', bankName: '', accountName: '', accountNo: '', ifsc: '', bankBranch: '',
     campusNote: 'Cash / Demand Draft / Cheque at the Admission Office, D Y Patil Knowledge City, Charholi Bk., Pune', replyTo: '', online: true };
-  const admSettings = async () => ({ ...DEF_SETTINGS, ...(await db.getSetting('admission_settings', {})) });
+  const admSettings = async () => ({ ...JSON.parse(tenant.brand(JSON.stringify(DEF_SETTINGS))), ...(await db.getSetting('admission_settings', {})) });
   const razor = () => (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET ? { key: process.env.RAZORPAY_KEY_ID, secret: process.env.RAZORPAY_KEY_SECRET } : null);
   app.get('/api/admin/admission-settings', C.requireAdmin, async (_req, res) => res.json({ settings: await admSettings(), razorpay: !!razor(), emailReady: await studentEmailReady(),
     whatsappApi: !!(process.env.WHATSAPP_TOKEN && process.env.WHATSAPP_PHONE_ID), aiReady: provider() !== 'none',
-    relaySecret: !!process.env.MAIL_WEBHOOK_SECRET, feeYear: FEE_YEAR, feeTable: FEE_TABLE }));
+    relaySecret: !!process.env.MAIL_WEBHOOK_SECRET, feeYear: feeYear(), feeTable: FEE_TABLE }));
   app.put('/api/admin/admission-settings', C.requireAdmin, C.requireXhr, async (req, res) => {
     const b = req.body || {}, cur = await admSettings(), s = { ...cur };
     for (const k of ['upiId', 'payee', 'bankName', 'accountName', 'accountNo', 'ifsc', 'bankBranch', 'campusNote', 'replyTo']) if (b[k] !== undefined) s[k] = C.clean(b[k], k === 'campusNote' ? 200 : 80);
@@ -266,7 +267,7 @@ module.exports = function plus(app, C) {
     }
     res.json({ ok: true, link, reused, emailed, fee: a.fee_amount, type: a.admission_type });
   });
-  const formMessage = (row, link, type, by) => `Dear ${row.student_name.split(' ')[0]},\n\nGreetings from Ajeenkya DY Patil University, Pune!\n\nPlease fill your ${type.toLowerCase()} admission form for ${row.course} here:\n${link}\n\nIt takes about 10 minutes. Keep your marksheets and a passport-size photo ready. After submitting, you can pay the admission fee online, by UPI, bank transfer or at the campus.\n\nFor any help, reply to this message.\n\nRegards,\n${by}\nAdmission Office, ADYPU`;
+  const formMessage = (row, link, type, by) => tenant.brand(`Dear ${row.student_name.split(' ')[0]},\n\nGreetings from Ajeenkya DY Patil University, Pune!\n\nPlease fill your ${type.toLowerCase()} admission form for ${row.course} here:\n${link}\n\nIt takes about 10 minutes. Keep your marksheets and a passport-size photo ready. After submitting, you can pay the admission fee online, by UPI, bank transfer or at the campus.\n\nFor any help, reply to this message.\n\nRegards,\n${by}\nAdmission Office, ADYPU`);
 
   // ---------- public: the student's application ----------
   const appLimiter = C.rateLimit({ windowMs: 10 * 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests. Please wait a few minutes.' } });
@@ -293,7 +294,7 @@ module.exports = function plus(app, C) {
     const c = row ? await C.counsellorOf(row) : null;
     return { app: { app_no: a.app_no, status: a.status, type: a.admission_type, fee: a.fee_amount || 0, paid: a.paid_amount || 0, submitted_at: a.submitted_at },
       student: row ? { name: row.student_name, mobile: sec.maskMobile(row.mobile), ref: row.ref_no } : {}, data, files, payments: pays, pay, counsellor: c,
-      contacts: C.CONTACTS, schema: { sections: FORM.SECTIONS, docs: FORM.DOCS }, levels: LEVELS, feeTable: FEE_TABLE, feeYear: FEE_YEAR, year: C.ACADEMIC_YEAR };
+      contacts: C.CONTACTS(), schema: JSON.parse(tenant.brand(JSON.stringify({ sections: FORM.SECTIONS, docs: FORM.DOCS }))), brand: { name: tenant.cur().name, short: tenant.cur().short, city: tenant.cur().city, logo: tenant.cur().slug && tenant.cur().hasLogo ? tenant.base() + '/logo' : '' }, levels: LEVELS, feeTable: FEE_TABLE, feeYear: feeYear(), year: C.ACADEMIC_YEAR() };
   }
   app.get('/api/apply/:token', appLimiter, async (req, res) => {
     const a = await appByToken(req.params.token); if (!a) return res.status(404).json({ error: 'This admission link is not valid. Please ask your counsellor for a new link.' });
@@ -345,8 +346,8 @@ module.exports = function plus(app, C) {
     const files = await db.all('SELECT kind FROM app_files WHERE application_id = $1', [a.id]);
     FORM.DOCS.filter((d) => d.req && !files.some((f) => f.kind === d.k)).forEach((d) => { errors['doc_' + d.k] = `Please upload: ${d.label}`; });
     if (Object.keys(errors).length) return res.status(400).json({ error: 'Please complete the highlighted fields.', fields: errors });
-    const yr = C.ACADEMIC_YEAR.replace('–', '-').replace(/^20(\d\d)-(\d\d)$/, '$1-$2');
-    const app_no = `ADYPU/${yr}/${String(a.id).padStart(5, '0')}`;
+    const yr = C.ACADEMIC_YEAR().replace('–', '-').replace(/^20(\d\d)-(\d\d)$/, '$1-$2');
+    const app_no = `${tenant.cur().short}/${yr}/${String(a.id).padStart(5, '0')}`;
     const fee = await feeFor(a.admission_type, data.level, data.programme, data.branch);
     await db.updateRow('applications', a.id, { data: sec.encrypt(JSON.stringify(data)), status: 'Submitted', submitted_at: now(), updated_at: now(), app_no, fee_amount: fee, programme: courseLabel(data.programme, data.branch) });
     const row = await db.getEnquiry(a.enquiry_id);
@@ -406,7 +407,7 @@ module.exports = function plus(app, C) {
     const j = resp ? await resp.json().catch(() => ({})) : {};
     if (!resp || !resp.ok || !j.id) return res.status(502).json({ error: 'Could not start the online payment. Please try UPI / bank transfer.' });
     const row = await db.getEnquiry(a.enquiry_id);
-    res.json({ key: r.key, order_id: j.id, amount: j.amount, name: 'Ajeenkya DY Patil University', description: `${a.admission_type} admission · ${a.app_no}`, prefill: { name: row ? row.student_name : '' } });
+    res.json({ key: r.key, order_id: j.id, amount: j.amount, name: tenant.brand('Ajeenkya DY Patil University'), description: `${a.admission_type} admission · ${a.app_no}`, prefill: { name: row ? row.student_name : '' } });
   });
   app.post('/api/apply/:token/rzp/verify', appLimiter, async (req, res) => {
     const a = await appByToken(req.params.token), r = razor(); if (!a || !r) return res.status(400).json({ error: 'Not available' });
@@ -422,7 +423,7 @@ module.exports = function plus(app, C) {
     res.json({ ok: true, ...(await publicState(await db.get('SELECT * FROM applications WHERE id = $1', [a.id]))) });
   });
   async function confirmPayment(a, pid, amount, by) {
-    const receipt_no = `ADYPU-RCPT-${new Date().getFullYear()}-${String(pid).padStart(6, '0')}`;
+    const receipt_no = `${tenant.cur().short}-RCPT-${new Date().getFullYear()}-${String(pid).padStart(6, '0')}`;
     await db.updateRow('payments', pid, { receipt_no });
     const paid = (a.paid_amount || 0) + amount, full = paid >= (a.fee_amount || 0);
     await db.updateRow('applications', a.id, { paid_amount: paid, status: full ? 'Paid' : 'Part paid', updated_at: now() });
@@ -473,14 +474,14 @@ module.exports = function plus(app, C) {
     const a = await db.get('SELECT * FROM applications WHERE id = $1', [p.application_id]);
     if (req.body.ok) {
       const amount = parseInt(req.body.amount, 10) || p.amount;
-      await db.updateRow('payments', p.id, { status: 'Verified', amount, verified_by: C.ADMIN_NAME, verified_at: now(), note: C.clean(req.body.note, 200) || null });
-      await confirmPayment(a, p.id, amount, C.ADMIN_NAME);
+      await db.updateRow('payments', p.id, { status: 'Verified', amount, verified_by: C.ADMIN_NAME(), verified_at: now(), note: C.clean(req.body.note, 200) || null });
+      await confirmPayment(a, p.id, amount, C.ADMIN_NAME());
       audit(req, 'payment_verified', `${a.app_no} · ${inr(amount)} · ${p.mode}`, 'medium');
     } else {
-      await db.updateRow('payments', p.id, { status: 'Rejected', verified_by: C.ADMIN_NAME, verified_at: now(), note: C.clean(req.body.note, 200) || 'Not received' });
+      await db.updateRow('payments', p.id, { status: 'Rejected', verified_by: C.ADMIN_NAME(), verified_at: now(), note: C.clean(req.body.note, 200) || 'Not received' });
       await db.updateRow('applications', a.id, { status: (a.paid_amount || 0) > 0 ? 'Part paid' : 'Submitted', updated_at: now() });
       await db.updateEnquiry(a.enquiry_id, { app_status: 'Payment rejected' });
-      await db.addEvent(a.enquiry_id, C.ADMIN_NAME, 'payment', `Payment of ${inr(p.amount)} rejected: ${C.clean(req.body.note, 200) || 'not received'}`);
+      await db.addEvent(a.enquiry_id, C.ADMIN_NAME(), 'payment', `Payment of ${inr(p.amount)} rejected: ${C.clean(req.body.note, 200) || 'not received'}`);
       audit(req, 'payment_rejected', `${a.app_no} · ${inr(p.amount)}`, 'medium');
     }
     res.json({ ok: true });
@@ -490,17 +491,17 @@ module.exports = function plus(app, C) {
     const a = await db.get('SELECT * FROM applications WHERE id = $1', [parseId(req.params.id)]); if (!a || !a.submitted_at) return res.status(400).json({ error: 'The student must submit the form first.' });
     const amount = parseInt(req.body.amount, 10) || 0; if (amount < 1) return res.status(400).json({ error: 'Enter the amount.' });
     const mode = C.clean(req.body.mode, 40) || 'Cash at campus';
-    const pid = await db.insertRow('payments', { application_id: a.id, amount, mode, reference: C.clean(req.body.reference, 40) || null, status: 'Verified', created_at: now(), verified_by: C.ADMIN_NAME, verified_at: now() });
-    await confirmPayment(a, pid, amount, C.ADMIN_NAME);
+    const pid = await db.insertRow('payments', { application_id: a.id, amount, mode, reference: C.clean(req.body.reference, 40) || null, status: 'Verified', created_at: now(), verified_by: C.ADMIN_NAME(), verified_at: now() });
+    await confirmPayment(a, pid, amount, C.ADMIN_NAME());
     audit(req, 'payment_recorded', `${a.app_no} · ${inr(amount)} · ${mode}`, 'medium');
     res.json({ ok: true });
   });
   app.patch('/api/admin/applications/:id', C.requireAdmin, C.requireXhr, async (req, res) => {
     const a = await db.get('SELECT * FROM applications WHERE id = $1', [parseId(req.params.id)]); if (!a) return res.status(404).json({ error: 'Not found' });
     const upd = { updated_at: now() };
-    if (req.body.fee !== undefined) { upd.fee_amount = Math.max(0, parseInt(req.body.fee, 10) || 0); await db.addEvent(a.enquiry_id, C.ADMIN_NAME, 'payment', `Fee for ${a.app_no || 'application'} set to ${inr(upd.fee_amount)}`); }
-    if (req.body.cancel) { upd.status = 'Cancelled'; await db.updateEnquiry(a.enquiry_id, { app_status: 'Form cancelled' }); await db.addEvent(a.enquiry_id, C.ADMIN_NAME, 'form', 'Admission form cancelled'); }
-    if (req.body.reopen && a.status === 'Submitted') { upd.status = 'Opened'; await db.addEvent(a.enquiry_id, C.ADMIN_NAME, 'form', 'Form re-opened for corrections'); }
+    if (req.body.fee !== undefined) { upd.fee_amount = Math.max(0, parseInt(req.body.fee, 10) || 0); await db.addEvent(a.enquiry_id, C.ADMIN_NAME(), 'payment', `Fee for ${a.app_no || 'application'} set to ${inr(upd.fee_amount)}`); }
+    if (req.body.cancel) { upd.status = 'Cancelled'; await db.updateEnquiry(a.enquiry_id, { app_status: 'Form cancelled' }); await db.addEvent(a.enquiry_id, C.ADMIN_NAME(), 'form', 'Admission form cancelled'); }
+    if (req.body.reopen && a.status === 'Submitted') { upd.status = 'Opened'; await db.addEvent(a.enquiry_id, C.ADMIN_NAME(), 'form', 'Form re-opened for corrections'); }
     await db.updateRow('applications', a.id, upd);
     audit(req, 'application_updated', `${a.app_no || '#' + a.id}: ${Object.keys(upd).filter((k) => k !== 'updated_at').join(', ')}`, 'info');
     res.json({ ok: true });
@@ -519,7 +520,7 @@ module.exports = function plus(app, C) {
     const doc = new C.PDFDocument({ size: 'A4', margin: 40, bufferPages: true, info: { Title: `Application ${a.app_no || ''}`, Author: 'ADYPU Admission Office' } });
     res.setHeader('Content-Type', 'application/pdf'); res.setHeader('Content-Disposition', `inline; filename="Application_${String(a.app_no || a.id).replace(/\//g, '-')}.pdf"`);
     doc.pipe(res);
-    pdfHead(doc, `Application Form · ${a.admission_type} admission · ${C.ACADEMIC_YEAR}`, `Application No: ${a.app_no || '—'}`);
+    pdfHead(doc, `Application Form · ${a.admission_type} admission · ${C.ACADEMIC_YEAR()}`, `Application No: ${a.app_no || '—'}`);
     const W = doc.page.width, L = 40, R = W - 40;
     let y = 90;
     const photo = await db.get("SELECT * FROM app_files WHERE application_id = $1 AND kind = 'photo'", [a.id]);
@@ -584,12 +585,12 @@ module.exports = function plus(app, C) {
   const aiSettings = async () => ({ ...AI_DEF, ...(await db.getSetting('ai_caller', {})) });
   const aiSecret = () => process.env.AI_CALLER_SECRET || crypto.createHmac('sha256', process.env.SESSION_SECRET || 'dev').update('ai-caller').digest('base64url').slice(0, 24);
   const provider = () => (process.env.VAPI_API_KEY && process.env.VAPI_ASSISTANT_ID && process.env.VAPI_PHONE_NUMBER_ID ? 'vapi' : process.env.AI_CALLER_WEBHOOK_URL ? 'webhook' : 'none');
-  let AI = null;
+  const AIC = new Map(); // per college
   async function aiUser() {
-    if (AI) return AI;
+    const key = tenant.cur().slug; if (AIC.has(key)) return AIC.get(key);
     let u = await db.getUserAuth('ai-caller');
     if (!u) { await db.createUser({ name: 'AI Caller', username: 'ai-caller', mobile: '', kind: 'ai', pass_hash: await C.bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10) }); u = await db.getUserAuth('ai-caller'); }
-    AI = await db.getUser(u.id); return AI;
+    const ai = await db.getUser(u.id); AIC.set(key, ai); return ai;
   }
   const istHour = () => new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
   const istDow = () => new Date(Date.now() + 5.5 * 3600e3).getUTCDay();
@@ -608,7 +609,7 @@ module.exports = function plus(app, C) {
     res.json({ settings: s, provider: provider(), ai: { id: ai.id, name: ai.name }, webhook: `${base(req)}/api/ai-caller/${provider() === 'vapi' ? 'vapi' : 'callback'}?secret=${aiSecret()}`,
       queue: { assigned: q.rows.length, waiting: q.due.length, inProgress: q.inProgress.length, open: q.open.length, today: today.length, connectedToday: today.filter((x) => x.outcome === 'Connected').length,
         interested: q.rows.filter((r) => ['Interested', 'Counselling Done', 'Form Sent', 'Applied', 'Admitted'].includes(r.status)).length },
-      recent: recent.map((c) => ({ ref: c.ref_no, at: new Date(c.at).toISOString(), outcome: c.outcome, summary: sec.decrypt(c.feedback) || '', status: c.status_after })), prompt: AI_PROMPT });
+      recent: recent.map((c) => ({ ref: c.ref_no, at: new Date(c.at).toISOString(), outcome: c.outcome, summary: sec.decrypt(c.feedback) || '', status: c.status_after })), prompt: tenant.brand(AI_PROMPT) });
   });
   app.put('/api/admin/ai-caller', C.requireAdmin, C.requireXhr, async (req, res) => {
     const b = req.body || {}, s = await aiSettings();
@@ -623,17 +624,17 @@ module.exports = function plus(app, C) {
   });
   async function placeAiCall(row) {
     const s = await aiSettings(), first = row.student_name.split(' ')[0], c = await C.counsellorOf(row);
-    const vars = { student_name: first, full_name: row.student_name, programme: row.course, city: row.city || '', ref: row.ref_no, university: 'Ajeenkya DY Patil University, Pune',
-      fee: (() => { const f = tuitionFee(row.level, row.programme, row.branch); return f ? inr(f) + ' per year (' + FEE_YEAR + ')' : 'shared by the counsellor'; })(), counsellor: c ? c.name : 'the admission team' };
+    const vars = { student_name: first, full_name: row.student_name, programme: row.course, city: row.city || '', ref: row.ref_no, university: tenant.brand('Ajeenkya DY Patil University, Pune'),
+      fee: (() => { const f = tuitionFee(row.level, row.programme, row.branch); return f ? inr(f) + ' per year (' + feeYear() + ')' : 'shared by the counsellor'; })(), counsellor: c ? c.name : 'the admission team' };
     let callId = null;
     if (provider() === 'vapi') {
       const r = await fetch('https://api.vapi.ai/call', { method: 'POST', headers: { Authorization: `Bearer ${process.env.VAPI_API_KEY}`, 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({ assistantId: process.env.VAPI_ASSISTANT_ID, phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID, customer: { number: `+91${row.mobile}`, name: first }, assistantOverrides: { variableValues: vars } }) });
+        body: JSON.stringify({ assistantId: process.env.VAPI_ASSISTANT_ID, phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID, customer: { number: `+91${row.mobile}`, name: first }, metadata: { college: tenant.cur().slug || '' }, assistantOverrides: { variableValues: vars } }) });
       const j = await r.json().catch(() => ({})); if (!r.ok || !j.id) throw new Error(`Vapi ${r.status}: ${JSON.stringify(j).slice(0, 160)}`); callId = 'vapi:' + j.id;
     } else if (provider() === 'webhook') {
-      callId = 'wh:' + crypto.randomBytes(9).toString('hex');
+      callId = 'wh:' + (tenant.cur().slug ? tenant.cur().slug + ':' : '') + crypto.randomBytes(9).toString('hex');
       const r = await fetch(process.env.AI_CALLER_WEBHOOK_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(20000),
-        body: JSON.stringify({ call_ref: callId, student: { ...vars, mobile: `+91${row.mobile}` }, callback_url: `${C.PUBLIC_URL || ''}/api/ai-caller/callback`, secret: aiSecret() }) });
+        body: JSON.stringify({ call_ref: callId, student: { ...vars, mobile: `+91${row.mobile}` }, callback_url: `${C.PUBLIC_URL() || ''}/api/ai-caller/callback`, secret: aiSecret() }) });
       if (!r.ok) throw new Error(`webhook ${r.status}`);
     } else throw new Error('No AI calling provider configured');
     await db.updateEnquiry(row.id, { ai_pending_at: now(), ai_call_id: callId, ai_attempts: (row.ai_attempts || 0) + 1 });
@@ -654,7 +655,7 @@ module.exports = function plus(app, C) {
       for (const r of list) { if (slots-- <= 0) break; try { await placeAiCall(r); } catch (e) { console.error('AI call', r.ref_no, e.message); await db.addEvent(r.id, 'AI Caller', 'ai', `🤖 Could not place call: ${e.message.slice(0, 120)}`); break; } }
     } catch (e) { console.error('AI tick', e.message); } finally { aiBusy = false; }
   }
-  setInterval(aiTick, 60 * 1000);
+  setInterval(() => C.forEachCollege(aiTick), 60 * 1000);
 
   // Result of an AI call → call log, status, next follow-up, hand-over to a human
   async function applyAiResult(row, r) {
@@ -673,7 +674,7 @@ module.exports = function plus(app, C) {
     const hot = outcome === 'Connected' && /^(yes|true|interested|hot)/.test(interest);
     const giveUp = outcome !== 'Connected' && !next;
     if ((hot || giveUp) && s.handoffId) { const u = await db.getUser(s.handoffId); if (u && Number(u.active)) { await db.assignMany([row.id], u); await db.addEvent(row.id, 'AI Caller', 'assign', `🤖 Handed over to ${u.name} for a human call${hot ? ' (interested)' : ''}`); } }
-    if (hot && s.autoForm && /^(yes|true)/.test(String(r.wants_form || ''))) { try { const { app: a } = await createApplication(row, 'Provisional', 'AI Caller'); if (row.email) await emailStudent(row, `Your ADYPU admission form – ${row.course}`, formMessage(row, `${C.PUBLIC_URL || ''}/apply/${sec.decrypt(a.token_enc)}`, 'Provisional', 'ADYPU Admission Office')); } catch (e) { console.error('AI auto form', e.message); } }
+    if (hot && s.autoForm && /^(yes|true)/.test(String(r.wants_form || ''))) { try { const { app: a } = await createApplication(row, 'Provisional', 'AI Caller'); if (row.email) await emailStudent(row, `Your ADYPU admission form – ${row.course}`, formMessage(row, `${C.PUBLIC_URL() || ''}/apply/${sec.decrypt(a.token_enc)}`, 'Provisional', 'ADYPU Admission Office')); } catch (e) { console.error('AI auto form', e.message); } }
   }
   const addDays = (n) => new Date(Date.now() + 5.5 * 3600e3 + n * 864e5).toISOString().slice(0, 10);
   const secretOk = (req) => { const g = String(req.get('x-vapi-secret') || req.query.secret || req.body.secret || ''), e = aiSecret(); return g.length === e.length && crypto.timingSafeEqual(Buffer.from(g), Buffer.from(e)); };
@@ -683,20 +684,30 @@ module.exports = function plus(app, C) {
     if (!secretOk(req)) return res.status(401).json({});
     const m = (req.body || {}).message || {};
     if (m.type !== 'end-of-call-report') return res.json({ ok: true });
+    const col = m.call && m.call.metadata && m.call.metadata.college;
+    if (col && !tenant.als.getStore()) { const ctx = await C.loadCollege(String(col)).catch(() => null); if (ctx) return tenant.als.run(ctx, () => vapiReport(m, res)); }
+    return vapiReport(m, res);
+  });
+  async function vapiReport(m, res) {
     const id = m.call && m.call.id; const row = id && await db.get('SELECT id FROM enquiries WHERE ai_call_id = $1', ['vapi:' + id]);
     if (!row) return res.json({ ok: true, unknown: true });
     const sd = (m.analysis && m.analysis.structuredData) || {};
     const outcome = VAPI_MAP[m.endedReason] || (/fail|error|unreach|invalid/.test(String(m.endedReason)) ? 'Not reachable' : 'Connected');
     await applyAiResult(await db.getEnquiry(row.id), { outcome, summary: (m.analysis && m.analysis.summary) || m.summary || '', interested: sd.interested ?? sd.interest, callback_date: sd.callback_date, wants_form: sd.wants_admission_form });
     res.json({ ok: true });
-  });
+  }
   app.post('/api/ai-caller/callback', C.express.json({ limit: '1mb' }), async (req, res) => {
     if (!secretOk(req)) return res.status(401).json({});
-    const b = req.body || {}; const row = b.call_ref && await db.get('SELECT id FROM enquiries WHERE ai_call_id = $1', [String(b.call_ref)]);
+    const b = req.body || {}; const col = String(b.call_ref || '').split(':').length === 3 ? String(b.call_ref).split(':')[1] : '';
+    if (col && !tenant.als.getStore()) { const ctx = await C.loadCollege(col).catch(() => null); if (ctx) return tenant.als.run(ctx, () => whReport(b, res)); }
+    return whReport(b, res);
+  });
+  async function whReport(b, res) {
+    const row = b.call_ref && await db.get('SELECT id FROM enquiries WHERE ai_call_id = $1', [String(b.call_ref)]);
     if (!row) return res.status(404).json({ error: 'unknown call_ref' });
     await applyAiResult(await db.getEnquiry(row.id), { outcome: C.CALL_OUTCOMES.includes(b.outcome) ? b.outcome : 'Connected', summary: C.clean(b.summary, 600), interested: b.interested, callback_date: b.callback_date, wants_form: b.wants_admission_form });
     res.json({ ok: true });
-  });
+  }
   if (!C.IS_PROD) app.post('/api/admin/ai-caller/simulate', C.requireAdmin, C.requireXhr, async (req, res) => { // local testing only
     const row = await db.getEnquiry(parseId(req.body.id)); if (!row) return res.status(404).json({});
     if (!row.ai_call_id) await db.updateEnquiry(row.id, { ai_call_id: 'sim:' + row.id, ai_attempts: 1 });
@@ -708,7 +719,7 @@ module.exports = function plus(app, C) {
   const AI_PROMPT = `You are Riya, a polite admission counsellor calling on behalf of Ajeenkya DY Patil University (ADYPU), Pune.
 Speak in simple English; switch to Hindi or Marathi if the student prefers. Keep the call under 3 minutes.
 1. Greet {{student_name}} and say you are calling about their enquiry for {{programme}} (ref {{ref}}). Ask if it is a good time; if not, ask when to call back.
-2. Ask: are they still looking for admission for ${C.ACADEMIC_YEAR}? Which programme / specialisation? Have they appeared for any entrance exam? Do they need a hostel?
+2. Ask: are they still looking for admission for ${C.ACADEMIC_YEAR()}? Which programme / specialisation? Have they appeared for any entrance exam? Do they need a hostel?
 3. Share only facts you were given: annual tuition fee {{fee}}; a counsellor ({{counsellor}}) will guide them in detail. Never promise scholarships, placements or seats.
 4. If interested, offer to send the online admission form link and to book a campus visit.
 5. Thank them and end politely.

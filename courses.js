@@ -35,13 +35,30 @@ const CATALOGUE = {
 // Admissions are for AY 2027-28; until the 2027-28 fee structure is published, the AY 2026-27 fees are shown as indicative.
 const FEE_YEAR = 'AY 2027-28, indicative as per AY 2026-27 fee structure';
 
-const LEVELS = Object.fromEntries(Object.entries(CATALOGUE).map(([lv, list]) => [lv, list.map(([school, name, icon, specs]) => {
-  const branches = specs.map((s) => s[0]).filter(Boolean);
-  return { name, school, icon, ...(branches.length ? { branches } : {}), fee: branches.length ? undefined : specs[0][1],
-    fees: branches.length ? Object.fromEntries(specs) : undefined, sub: branches.length ? `${school.replace('School of ', '')} · ${branches.length} options` : school.replace('School of ', '') };
-})]));
-// Engineering specialisations (B.Tech + M.Tech) — used by the chatbot and the QR poster
-const ENGINEERING_BRANCHES = [...LEVELS.UG[0].branches, ...LEVELS.PG[0].branches];
+// Build everything the portal needs from a catalogue in the format above (also used for each college's own catalogue)
+function build(catalogue) {
+  const LV = Object.fromEntries(Object.entries(catalogue).map(([lv, list]) => [lv, list.map(([school, name, icon, specs]) => {
+    const branches = specs.map((x) => x[0]).filter(Boolean);
+    return { name, school, icon, ...(branches.length ? { branches } : {}), fee: branches.length ? undefined : specs[0][1],
+      fees: branches.length ? Object.fromEntries(specs) : undefined, sub: branches.length ? `${String(school).replace(/^(School|Faculty|Department) of /, '')} · ${branches.length} options` : String(school).replace(/^(School|Faculty|Department) of /, '') };
+  })]));
+  if (!LV.UG) LV.UG = []; if (!LV.PG) LV.PG = [];
+  const FT = Object.entries(LV).flatMap(([lv, list]) => list.flatMap((p) => (p.branches ? p.branches.map((b) => ({ level: lv, school: p.school, programme: p.name, branch: b, fee: p.fees[b] }))
+    : [{ level: lv, school: p.school, programme: p.name, branch: '', fee: p.fee }])));
+  const tech = [...LV.UG, ...LV.PG].filter((p) => /tech|engineering/i.test(p.name) && p.branches).flatMap((p) => p.branches);
+  return { LEVELS: LV, FEE_TABLE: FT, ENGINEERING_BRANCHES: [...new Set(tech)] };
+}
+const DEFAULT = build(CATALOGUE);
+const tenant = require('./tenant');
+// the current college's catalogue (ADYPU's by default)
+const cat = () => { const t = tenant.als.getStore(); return (t && t.catalogue) || DEFAULT; };
+const objProxy = (key) => new Proxy({}, {
+  get: (_, p) => cat()[key][p], has: (_, p) => p in cat()[key], ownKeys: () => Reflect.ownKeys(cat()[key]),
+  getOwnPropertyDescriptor: (_, p) => (p in cat()[key] ? { value: cat()[key][p], enumerable: true, configurable: true, writable: true } : undefined),
+});
+const arrProxy = (key) => new Proxy([], { get: (_, p) => { const a = cat()[key]; const v = a[p]; return typeof v === 'function' ? v.bind(a) : v; } });
+const LEVELS = objProxy('LEVELS'), FEE_TABLE = arrProxy('FEE_TABLE'), ENGINEERING_BRANCHES = arrProxy('ENGINEERING_BRANCHES');
+const feeYear = () => { const t = tenant.als.getStore(); return (t && t.feeYear) || FEE_YEAR; };
 
 // "B.Tech – Civil Engineering" or "MCA"
 const courseLabel = (programme, branch) => (branch ? `${programme} – ${branch}` : programme);
@@ -53,12 +70,9 @@ function isValid(level, programme, branch) {
 }
 // Annual tuition fee for a programme / specialisation (₹), or null if unknown
 function tuitionFee(level, programme, branch) {
-  const p = findProgramme(level, programme) || [...LEVELS.UG, ...LEVELS.PG].find((x) => x.name === programme);
+  const p = findProgramme(level, programme) || [...(LEVELS.UG || []), ...(LEVELS.PG || [])].find((x) => x.name === programme);
   if (!p) return null;
   return p.branches ? (p.fees[branch] ?? null) : p.fee;
 }
-// Every programme as a flat list (for the fee table)
-const FEE_TABLE = Object.entries(LEVELS).flatMap(([lv, list]) => list.flatMap((p) => (p.branches ? p.branches.map((b) => ({ level: lv, school: p.school, programme: p.name, branch: b, fee: p.fees[b] }))
-  : [{ level: lv, school: p.school, programme: p.name, branch: '', fee: p.fee }])));
 
-module.exports = { LEVELS, ENGINEERING_BRANCHES, FEE_YEAR, FEE_TABLE, courseLabel, findProgramme, isValid, tuitionFee };
+module.exports = { LEVELS, ENGINEERING_BRANCHES, FEE_YEAR, FEE_TABLE, feeYear, courseLabel, findProgramme, isValid, tuitionFee, build, CATALOGUE };

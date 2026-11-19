@@ -7,12 +7,16 @@ const crypto = require('crypto');
 const path = require('path');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
+// PDFs made inside a college carry that college's name instead of ADYPU
+{ const t0 = PDFDocument.prototype.text; PDFDocument.prototype.text = function (str, ...a) { return t0.call(this, typeof str === 'string' && require('./tenant').als.getStore() ? require('./tenant').brand(str) : str, ...a); }; }
 const db = require('./db');
 const { LEVELS, courseLabel, isValid } = require('./courses');
 const sms = require('./sms');
 const chat = require('./chat');
 const { resolveRegion, CITY_SUGGESTIONS, REGIONS } = require('./regions');
-const CONTACTS = require('./contacts');
+const DEF_CONTACTS = require('./contacts');
+const tenant = require('./tenant');
+const T = () => tenant.als.getStore();
 const QRCode = require('qrcode');
 const sec = require('./sec');
 const fs = require('fs');
@@ -24,14 +28,14 @@ function sendView(res, name) {
     viewCache[name] = fs.readFileSync(path.join(__dirname, 'views', name), 'utf8')
       .replace(/(href|src)="(\/[^"?]+\.(?:css|js))"/g, `$1="$2?v=${ASSET_V}"`);
   }
-  res.set('Cache-Control', 'no-cache').type('html').send(viewCache[name]);
+  res.set('Cache-Control', 'no-cache').type('html').send(T() && CC.brandHtml ? CC.brandHtml(viewCache[name]) : viewCache[name]);
 }
-// Public address of the site, used inside QR codes. Set PUBLIC_URL (e.g. https://admissions.adypu.edu.in) once you have a domain.
-const PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
+// Public address of the site, used inside QR codes. Set PUBLIC_URL() (e.g. https://admissions.adypu.edu.in) once you have a domain.
+const DEF_PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
 
 const PORT = process.env.PORT || 3000;
-const ACADEMIC_YEAR = process.env.ACADEMIC_YEAR || '2027–28';
-const ADMIN_USER = process.env.ADMIN_USERNAME || 'admin';
+const DEF_ACADEMIC_YEAR = process.env.ACADEMIC_YEAR || '2027–28';
+const DEF_ADMIN_USER = process.env.ADMIN_USERNAME || 'admin';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
 const STATUSES = ['New', 'Contacted', 'Interested', 'Counselling Done', 'Form Sent', 'Applied', 'Admitted', 'Not Interested'];
 const CALL_OUTCOMES = ['Connected', 'Not picked', 'Busy', 'Switched off', 'Not reachable', 'Wrong number', 'Call back later'];
@@ -41,7 +45,7 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 const IS_PROD_CACHE = IS_PROD;
 // OTP: on by default. OTP_DEMO_MODE=true shows the code on screen (testing only — never in production).
 const OTP_REQUIRED = (process.env.OTP_REQUIRED || 'true') !== 'false'; // default; the admin can switch it in the Security tab
-const otpOn = async () => !!(await db.getSetting('otp_required', OTP_REQUIRED));
+const otpOn = async () => !!(await db.getSetting('otp_required', require('./tenant').als.getStore() ? false : OTP_REQUIRED)); // colleges: off until their own SMS sender is set up
 const OTP_DEMO = process.env.OTP_DEMO_MODE === 'true';
 const SEND_CONFIRMATION = (process.env.SEND_CONFIRMATION_SMS || 'true') !== 'false';
 // Student confirmation messages (SMS / WhatsApp) — admin switch in the Security tab; OFF until an official SMS pack / WhatsApp is ready
@@ -50,24 +54,35 @@ if (OTP_DEMO && IS_PROD) console.warn('⚠  OTP_DEMO_MODE is on in production �
 if (OTP_REQUIRED && sms.provider === 'console' && !OTP_DEMO) console.warn('⚠  SMS_PROVIDER=console: OTPs are only printed in this log, not sent. Configure an SMS provider before going live.');
 
 // Admin password: prefer a bcrypt hash; fall back to a plain env password (hashed in memory).
-let ADMIN_HASH = process.env.ADMIN_PASSWORD_HASH;
-if (!ADMIN_HASH) {
+let DEF_ADMIN_HASH = process.env.ADMIN_PASSWORD_HASH;
+if (!DEF_ADMIN_HASH) {
   const pw = process.env.ADMIN_PASSWORD || 'ChangeMe@ADYPU2027';
   if (!process.env.ADMIN_PASSWORD) console.warn('⚠  ADMIN_PASSWORD not set — using the default. Set it before going live!');
-  ADMIN_HASH = bcrypt.hashSync(pw, 12);
+  DEF_ADMIN_HASH = bcrypt.hashSync(pw, 12);
 }
 if (!process.env.SESSION_SECRET) console.warn('⚠  SESSION_SECRET not set — admin sessions reset on every restart.');
 // Security alerts + admin two-step login go to this mobile (and optionally email)
-const ADMIN_NAME = process.env.ADMIN_NAME || 'Dr. Atul Kathole';
-const ADMIN_MOBILE = String(process.env.ADMIN_MOBILE || '9960889772').replace(/\D/g, '').slice(-10);
-const ADMIN_2FA = !!ADMIN_MOBILE && process.env.ADMIN_2FA !== 'false';
+const DEF_ADMIN_NAME = process.env.ADMIN_NAME || 'Dr. Atul Kathole';
+const DEF_ADMIN_MOBILE = String(process.env.ADMIN_MOBILE || '9960889772').replace(/\D/g, '').slice(-10);
+const DEF_ADMIN_2FA = !!DEF_ADMIN_MOBILE && process.env.ADMIN_2FA !== 'false';
 // Admin login code + security alerts: 'email' (default) or 'sms' (also email). Switchable in the Security tab.
 const adminSms = async () => (await db.getSetting('admin_sms', process.env.ADMIN_SMS === 'true')) === true;
-if (!ADMIN_MOBILE) console.warn('⚠  ADMIN_MOBILE not set — security alerts will appear only in the dashboard and admin login has no OTP step.');
-const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
+if (!DEF_ADMIN_MOBILE) console.warn('⚠  ADMIN_MOBILE() not set — security alerts will appear only in the dashboard and admin login has no OTP step.');
+const DEF_ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO || '';
+// ---- values that differ for each college (the original ADYPU values when no college is selected) ----
+const ADMIN_USER = () => (T() ? T().admin.user : DEF_ADMIN_USER);
+const ADMIN_HASH = () => (T() ? T().admin.hash : DEF_ADMIN_HASH);
+const ADMIN_NAME = () => (T() ? T().admin.name : DEF_ADMIN_NAME);
+const ADMIN_MOBILE = () => (T() ? T().admin.mobile || '' : DEF_ADMIN_MOBILE);
+const ADMIN_2FA = () => (T() ? !!(T().admin.email && mailer) : DEF_ADMIN_2FA);
+const ALERT_EMAIL_TO = () => (T() ? T().admin.email || '' : DEF_ALERT_EMAIL_TO);
+const ACADEMIC_YEAR = () => (T() && T().academicYear) || DEF_ACADEMIC_YEAR;
+const CONTACTS = () => (T() ? T().contacts || [] : DEF_CONTACTS);
+const PUBLIC_URL = () => (DEF_PUBLIC_URL ? DEF_PUBLIC_URL + tenant.base() : '');
+const siteUrl = (req) => (PUBLIC_URL() || `${req.protocol}://${req.get('host')}${tenant.base()}`);
 let mailer = null;
-// Email alerts: the alert mailbox can send to itself. SMTP_USER defaults to ALERT_EMAIL_TO; SMTP_PASS is that mailbox's App Password.
-const SMTP_USER = process.env.SMTP_USER || ALERT_EMAIL_TO;
+// Email alerts: the alert mailbox can send to itself. SMTP_USER defaults to ALERT_EMAIL_TO(); SMTP_PASS is that mailbox's App Password.
+const SMTP_USER = process.env.SMTP_USER || DEF_ALERT_EMAIL_TO;
 // Hosts like Render's free plan block SMTP ports. MAIL_WEBHOOK_URL = a Google Apps Script web app (see google-apps-script/alert-mailer.gs)
 // that sends the email from the admin's Gmail over HTTPS. It is used first when set.
 const MAIL_WEBHOOK_URL = process.env.MAIL_WEBHOOK_URL || '';
@@ -77,16 +92,16 @@ const mailNonces = new Map();
 if (MAIL_WEBHOOK_URL) {
   mailer = { sendMail: async (m) => {
     let nonce;
-    if (String(m.to || '').toLowerCase() !== String(ALERT_EMAIL_TO).toLowerCase()) {
+    if (String(m.to || '').toLowerCase() !== String(DEF_ALERT_EMAIL_TO).toLowerCase()) {
       nonce = crypto.randomBytes(18).toString('base64url');
       mailNonces.set(nonce, { to: String(m.to).toLowerCase(), exp: Date.now() + 2 * 60 * 1000 });
     }
     const r = await fetch(MAIL_WEBHOOK_URL, { method: 'POST', redirect: 'follow', signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', nonce, to: m.to, subject: m.subject, text: m.text, html: m.html, name: m.name, replyTo: m.replyTo }) });
+      body: JSON.stringify({ secret: process.env.MAIL_WEBHOOK_SECRET || '', nonce, to: m.to, subject: tenant.brand(m.subject || ''), text: tenant.brand(m.text || ''), html: m.html && tenant.brand(m.html), name: m.name && tenant.brand(m.name), replyTo: m.replyTo }) });
     const body = await r.text();
     if (!r.ok || !/^ok/.test(body.trim())) throw new Error(`mail relay replied ${r.status}: ${body.replace(/<[^>]+>/g, ' ').trim().slice(0, 100)}`);
   } };
-} else if (ALERT_EMAIL_TO && process.env.SMTP_PASS) {
+} else if (DEF_ALERT_EMAIL_TO && process.env.SMTP_PASS) {
   try {
     mailer = require('nodemailer').createTransport({ host: process.env.SMTP_HOST || 'smtp.gmail.com', port: +(process.env.SMTP_PORT || 587), secure: +(process.env.SMTP_PORT || 587) === 465,
       auth: { user: SMTP_USER, pass: process.env.SMTP_PASS } });
@@ -112,6 +127,9 @@ app.use(helmet({
   },
 }));
 app.use(require('compression')());
+// Colleges platform: /c/<code>/… runs the same CRM for another college with its own database (see colleges.js)
+const CC = { express, requireXhr };
+const collegesApi = require('./colleges')(app, CC);
 app.use(express.json({ limit: '20kb' }));
 // Never let browsers or proxies cache private pages, data or exports
 app.use(['/admin', '/team', '/api/admin', '/api/team', '/api/security'], (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); res.set('Pragma', 'no-cache'); next(); });
@@ -126,11 +144,11 @@ const devHash = (req) => crypto.createHash('sha256').update(String(req.get('user
 const passVer = (hash) => crypto.createHash('sha256').update(String(hash || '')).digest('base64url').slice(0, 10);
 function issueToken(user, req) {
   const info = typeof user === 'string' ? { u: user, role: 'admin' } : user;
-  const payload = Buffer.from(JSON.stringify({ ...info, d: req ? devHash(req) : undefined, exp: Date.now() + SESSION_HOURS * 3600 * 1000 })).toString('base64url');
+  const payload = Buffer.from(JSON.stringify({ ...info, tn: T() ? T().slug : '', d: req ? devHash(req) : undefined, exp: Date.now() + SESSION_HOURS * 3600 * 1000 })).toString('base64url');
   return `${payload}.${sign(payload)}`;
 }
 function readToken(req) {
-  const m = (req.headers.cookie || '').match(/(?:^|;\s*)adm=([^;]+)/);
+  const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${tenant.cookieName()}=([^;]+)`));
   if (!m) return null;
   const [payload, sig] = m[1].split('.');
   if (!payload || !sig) return null;
@@ -139,18 +157,19 @@ function readToken(req) {
   try {
     const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
     if (!(data.exp > Date.now())) return null;
+    if ((data.tn || '') !== (T() ? T().slug : '')) return null; // a login for one college never works for another
     if (data.d && data.d !== devHash(req)) { req.sessionMismatch = data; return null; }
     return data;
   } catch { return null; }
 }
-const cookieOpts = `Path=/; HttpOnly; SameSite=Strict${IS_PROD ? '; Secure' : ''}`;
+const cookieOpts = () => `Path=${tenant.base() || '/'}; HttpOnly; SameSite=Strict${IS_PROD ? '; Secure' : ''}`;
 
 // ---------- audit log & alerts ----------
 const ALERT_GAP = 10 * 60 * 1000;
 const lastAlert = new Map();
 function sendAlertEmail(text) {
   const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-  return mailer.sendMail({ from: `"ADYPU CRM Security" <${process.env.SMTP_FROM || SMTP_USER}>`, to: ALERT_EMAIL_TO, subject: `⚠ ADYPU CRM security alert`,
+  return mailer.sendMail({ from: `"ADYPU CRM Security" <${process.env.SMTP_FROM || SMTP_USER}>`, to: ALERT_EMAIL_TO(), subject: `⚠ ADYPU CRM security alert`,
     text: `${text}\n\nTime: ${when} IST\nOpen the admin dashboard → Security tab for details.\n\n— ADYPU Admission CRM (automatic message)`,
     html: `<div style="font-family:Arial,sans-serif;max-width:560px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>⚠ ADYPU CRM security alert</b></div><div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px"><p style="font-size:15px;margin:0 0 12px">${String(text).replace(/[<&>]/g, '')}</p><p style="color:#64748b;font-size:13px;margin:0">Time: ${when} IST<br>Open the admin dashboard → <b>Security</b> tab for details.</p></div></div>` });
 }
@@ -158,16 +177,16 @@ async function notifyAdmin(text, key) {
   const k = key || text;
   if (Date.now() - (lastAlert.get(k) || 0) < ALERT_GAP) return; // throttle repeats
   lastAlert.set(k, Date.now());
-  if (ADMIN_MOBILE && (await adminSms())) sms.send('alert', ADMIN_MOBILE, { text }).catch(() => {});
+  if (ADMIN_MOBILE() && (await adminSms())) sms.send('alert', ADMIN_MOBILE(), { text }).catch(() => {});
   // WhatsApp alert too (works when the WhatsApp sending number is the office number, not the admin's own)
-  const waTo = String(process.env.ALERT_WHATSAPP_TO || ADMIN_MOBILE || '').replace(/\D/g, '').slice(-10);
+  const waTo = String(process.env.ALERT_WHATSAPP_TO || ADMIN_MOBILE() || '').replace(/\D/g, '').slice(-10);
   if (waTo) require('./whatsapp').send('alert', waTo, { text }).catch(() => {});
   if (mailer) sendAlertEmail(text).catch((e) => console.error('alert email', e.message));
 }
 const SEVERE = new Set(['high', 'critical']);
 async function audit(req, action, details = '', severity = 'info', who) {
   const t = who || req.user || readToken(req) || {};
-  const actor = t.role === 'admin' || t.u === ADMIN_USER ? ADMIN_NAME : t.username || t.u || 'anonymous';
+  const actor = t.role === 'admin' || t.u === ADMIN_USER() ? ADMIN_NAME() : t.username || t.u || 'anonymous';
   const role = t.role === 'sub' ? 'sub-admin' : t.role === 'admin' ? 'admin' : t.username ? 'login attempt' : 'public';
   try { await db.insertAudit({ actor, role, user_id: t.id, ip: req.ip, ua: req.get('user-agent'), action, details, severity }); } catch (e) { console.error('audit', e.message); }
   if (SEVERE.has(severity)) notifyAdmin(`${actor} (${role}) - ${action.replace(/_/g, ' ')}${details ? ': ' + String(details).slice(0, 60) : ''}`,
@@ -178,7 +197,7 @@ const deny = (req, res, msg = 'Please log in again.') => (req.path.startsWith('/
 // Main admin only
 function requireAdmin(req, res, next) {
   const t = readToken(req);
-  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: ADMIN_NAME, u: ADMIN_USER }; return next(); }
+  if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: ADMIN_NAME(), u: ADMIN_USER() }; return next(); }
   if (t && t.role === 'sub') {
     audit(req, 'blocked_admin_access', `${req.method} ${req.originalUrl.split('?')[0]}`, 'high', { ...t, username: t.u });
     return req.originalUrl.startsWith('/api/') ? res.status(403).json({ error: 'You do not have permission for this. The admin has been notified.' }) : res.redirect('/team');
@@ -193,8 +212,8 @@ async function requireSub(req, res, next) {
   if (!t) { if (req.sessionMismatch) audit(req, 'session_used_from_other_device', req.sessionMismatch.u || '', 'high', { ...req.sessionMismatch, username: req.sessionMismatch.u }); return deny(req, res); }
   if ((t.role || 'admin') === 'admin') return req.path.startsWith('/api/') ? res.status(403).json({ error: 'This area is for sub-admin accounts.' }) : res.redirect('/admin');
   const u = await db.getUserAuth(t.u);
-  if (!u || u.id !== t.id || !Number(u.active)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
-  if (t.pv && t.pv !== passVer(u.pass_hash)) { res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`); return deny(req, res, 'Your password was changed. Please log in again.'); }
+  if (!u || u.id !== t.id || !Number(u.active)) { res.setHeader('Set-Cookie', `${tenant.cookieName()}=; Max-Age=0; ${cookieOpts()}`); return deny(req, res, 'Your account has been disabled. Please contact the admin.'); }
+  if (t.pv && t.pv !== passVer(u.pass_hash)) { res.setHeader('Set-Cookie', `${tenant.cookieName()}=; Max-Age=0; ${cookieOpts()}`); return deny(req, res, 'Your password was changed. Please log in again.'); }
   req.user = { role: 'sub', id: u.id, name: u.name, username: u.username, kind: u.kind === 'caller' ? 'caller' : 'counsellor', parent_id: u.parent_id || null };
   // a counsellor also looks after the students given to the callers in their own team
   if (req.user.kind === 'counsellor') req.user.team = (await db.all("SELECT id FROM users WHERE parent_id = $1 AND kind = 'caller'", [u.id])).map((x) => x.id);
@@ -242,7 +261,7 @@ app.post('/', (_req, res) => res.redirect(303, '/'));
 // ---------- QR codes ("scan to fill on your phone") ----------
 const refSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30);
 function formUrl(req, ref) {
-  const u = new URL((PUBLIC_URL || `${req.protocol}://${req.get('host')}`) + '/');
+  const u = new URL(siteUrl(req) + '/');
   u.searchParams.set('src', 'qr');
   if (ref) u.searchParams.set('ref', ref);
   return u.toString();
@@ -274,7 +293,7 @@ app.get('/qr-poster.pdf', async (req, res) => {
   doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(12).text('AJEENKYA DY PATIL UNIVERSITY  ·  PUNE', 0, 46, { width: W, align: 'center', characterSpacing: 2 });
   doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(34).text('Your next chapter', 0, 78, { width: W, align: 'center' });
   doc.fillColor(ORANGE).text('begins here.', 0, 118, { width: W, align: 'center' });
-  doc.fillColor('#DBE4FF').font('Helvetica').fontSize(13).text(`Admissions ${ACADEMIC_YEAR.replace('–', '-')}  ·  UG & PG  ·  Free counselling`, 0, 164, { width: W, align: 'center' });
+  doc.fillColor('#DBE4FF').font('Helvetica').fontSize(13).text(`Admissions ${ACADEMIC_YEAR().replace('–', '-')}  ·  UG & PG  ·  Free counselling`, 0, 164, { width: W, align: 'center' });
   doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(24).text('Scan to enquire in 30 seconds', 0, 236, { width: W, align: 'center' });
   doc.fillColor('#64748B').font('Helvetica').fontSize(12).text('Open your phone camera, point it at the code and fill the short form.', 0, 268, { width: W, align: 'center' });
   const qs = 230, qx = (W - qs) / 2, qy = 300;
@@ -296,12 +315,12 @@ app.get('/qr-poster.pdf', async (req, res) => {
   doc.rect(0, H - 92, W, 92).fill(NAVY);
   doc.rect(0, H - 96, W, 4).fill(ORANGE);
   doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(11).text('For further connection & queries', 0, H - 78, { width: W, align: 'center' });
-  doc.fillColor('#FFFFFF').font('Helvetica').fontSize(12).text(CONTACTS.map((c) => `${c.name}  ${c.phone.slice(0, 5)} ${c.phone.slice(5)}`).join('     |     '), 0, H - 58, { width: W, align: 'center' });
+  doc.fillColor('#FFFFFF').font('Helvetica').fontSize(12).text(CONTACTS().map((c) => `${c.name}  ${c.phone.slice(0, 5)} ${c.phone.slice(5)}`).join('     |     '), 0, H - 58, { width: W, align: 'center' });
   doc.fillColor('#CBD5F5').fontSize(9).text('D Y Patil Knowledge City, Charholi Bk., Via Lohegaon, Pune - 411081', 0, H - 34, { width: W, align: 'center' });
   doc.end();
 });
 
-app.get('/api/config', async (_req, res) => res.json({ levels: LEVELS, academicYear: ACADEMIC_YEAR, cities: CITY_SUGGESTIONS, otpRequired: await otpOn(), chips: chat.CHIPS, contacts: CONTACTS }));
+app.get('/api/config', async (_req, res) => res.json({ levels: LEVELS, academicYear: ACADEMIC_YEAR(), cities: CITY_SUGGESTIONS, otpRequired: await otpOn(), chips: chat.CHIPS, contacts: CONTACTS() }));
 app.get('/api/region', (req, res) => res.json(resolveRegion(String(req.query.city || '').slice(0, 60))));
 
 // ---------- mobile OTP ----------
@@ -442,7 +461,7 @@ app.get('/admin/login', (_req, res) => sendView(res, 'login.html'));
 const fails = new Map(); // username → { n, until }
 const LOCK_AFTER = 5, LOCK_MIN = 15;
 const challenges = new Map(); // admin OTP challenges
-function setSession(res, data, req) { res.setHeader('Set-Cookie', `adm=${issueToken(data, req)}; Max-Age=${SESSION_HOURS * 3600}; ${cookieOpts}`); }
+function setSession(res, data, req) { res.setHeader('Set-Cookie', `${tenant.cookieName()}=${issueToken(data, req)}; Max-Age=${SESSION_HOURS * 3600}; ${cookieOpts()}`); }
 app.post('/api/admin/login', loginLimiter, requireXhr, async (req, res) => {
   const { username, password } = req.body || {};
   const uname = String(username || '').trim().slice(0, 40), key = uname.toLowerCase();
@@ -458,68 +477,68 @@ app.post('/api/admin/login', loginLimiter, requireXhr, async (req, res) => {
     fails.set(key, r);
     return res.status(401).json({ error: 'Invalid username or password.' });
   };
-  const isMain = uname.length === ADMIN_USER.length && crypto.timingSafeEqual(Buffer.from(uname), Buffer.from(ADMIN_USER));
+  const isMain = uname.length === ADMIN_USER().length && crypto.timingSafeEqual(Buffer.from(uname), Buffer.from(ADMIN_USER()));
   if (isMain) {
-    if (!(await bcrypt.compare(String(password || ''), ADMIN_HASH))) return failed();
+    if (!(await bcrypt.compare(String(password || ''), ADMIN_HASH()))) return failed();
     fails.delete(key);
-    if (ADMIN_2FA) {
+    if (ADMIN_2FA()) {
       const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0'), id = crypto.randomBytes(16).toString('base64url');
-      challenges.set(id, { hash: sign('2fa:' + code), exp: Date.now() + 5 * 60000, tries: 0, d: devHash(req) });
-      const viaSms = (await adminSms()) || !mailer;
+      challenges.set(id, { hash: sign('2fa:' + code), exp: Date.now() + 5 * 60000, tries: 0, d: devHash(req), tn: T() ? T().slug : '' });
+      const viaSms = !!ADMIN_MOBILE() && ((await adminSms()) || !mailer);
       let sent = { ok: true };
       if (!OTP_DEMO) {
-        if (viaSms) sent = await sms.send('otp', ADMIN_MOBILE, { otp: code });
+        if (viaSms) sent = await sms.send('otp', ADMIN_MOBILE(), { otp: code });
         else {
           const when = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-          sent = await mailer.sendMail({ to: ALERT_EMAIL_TO, subject: `ADYPU CRM login code: ${code}`,
+          sent = await mailer.sendMail({ to: ALERT_EMAIL_TO(), subject: `ADYPU CRM login code: ${code}`,
             text: `Your ADYPU CRM admin login code is ${code}\n\nIt is valid for 5 minutes. Requested ${when} IST from IP ${req.ip}.\nIf you did not try to sign in, change the admin password immediately.`,
             html: `<div style="font-family:Arial,sans-serif;max-width:520px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>ADYPU CRM - admin login code</b></div><div style="border:1px solid #e2e8f0;border-top:0;padding:20px;border-radius:0 0 10px 10px"><p style="margin:0 0 8px">Your login code is</p><p style="font-size:32px;letter-spacing:8px;font-weight:700;margin:0 0 14px;color:#0B1F4B">${code}</p><p style="color:#64748b;font-size:13px;margin:0">Valid for 5 minutes. Requested ${when} IST from IP ${req.ip}.<br>If this was not you, change the admin password immediately.</p></div></div>` })
             .then(() => ({ ok: true })).catch((e) => { console.error('login code email', e.message); return { ok: false }; });
         }
       }
       if (!sent.ok) return res.status(502).json({ error: 'Could not send the login code. Please try again.' });
-      const maskedEmail = sec.maskEmail(ALERT_EMAIL_TO);
-      return res.json({ ok: true, otp: true, challenge: id, sentTo: viaSms ? `+91 ${sec.maskMobile(ADMIN_MOBILE)} by SMS` : `${maskedEmail} by email (check Inbox / Spam)`, ...(OTP_DEMO ? { demoOtp: code } : {}) });
+      const maskedEmail = sec.maskEmail(ALERT_EMAIL_TO());
+      return res.json({ ok: true, otp: true, challenge: id, sentTo: viaSms ? `+91 ${sec.maskMobile(ADMIN_MOBILE())} by SMS` : `${maskedEmail} by email (check Inbox / Spam)`, ...(OTP_DEMO ? { demoOtp: code } : {}) });
     }
-    setSession(res, { u: ADMIN_USER, role: 'admin' }, req);
-    audit(req, 'admin_login', 'password', 'info', { role: 'admin', u: ADMIN_USER });
-    return res.json({ ok: true, role: 'admin', redirect: '/admin' });
+    setSession(res, { u: ADMIN_USER(), role: 'admin' }, req);
+    audit(req, 'admin_login', 'password', 'info', { role: 'admin', u: ADMIN_USER() });
+    return res.json({ ok: true, role: 'admin', redirect: tenant.base() + '/admin' });
   }
   const u = await db.getUserAuth(uname);
-  const ok = await bcrypt.compare(String(password || ''), u ? u.pass_hash : ADMIN_HASH); // compare anyway: same timing
+  const ok = await bcrypt.compare(String(password || ''), u ? u.pass_hash : ADMIN_HASH()); // compare anyway: same timing
   if (!u || !ok || u.kind === 'ai') return failed();
   if (!Number(u.active)) { audit(req, 'disabled_account_login', uname, 'medium', { username: uname, id: u.id, role: 'sub' }); return res.status(403).json({ error: 'This account is disabled. Please contact the admin.' }); }
   fails.delete(key);
   await db.touchLogin(u.id);
   setSession(res, { u: u.username, role: 'sub', id: u.id, n: u.name, pv: passVer(u.pass_hash) }, req);
   audit(req, 'sub_admin_login', '', 'info', { role: 'sub', id: u.id, username: u.username });
-  res.json({ ok: true, role: 'sub', redirect: '/team' });
+  res.json({ ok: true, role: 'sub', redirect: tenant.base() + '/team' });
 });
 app.post('/api/admin/login/verify', loginLimiter, requireXhr, async (req, res) => {
   const c = challenges.get(String(req.body.challenge || ''));
-  if (!c || c.exp < Date.now() || c.d !== devHash(req)) return res.status(400).json({ error: 'This code has expired. Please sign in again.', restart: true });
+  if (!c || c.exp < Date.now() || c.d !== devHash(req) || c.tn !== (T() ? T().slug : '')) return res.status(400).json({ error: 'This code has expired. Please sign in again.', restart: true });
   const code = String(req.body.otp || '').replace(/\D/g, '');
   const good = code.length === 6 && crypto.timingSafeEqual(Buffer.from(sign('2fa:' + code)), Buffer.from(c.hash));
   if (!good) {
     c.tries += 1;
-    if (c.tries >= 5) { challenges.delete(String(req.body.challenge)); audit(req, 'admin_otp_failed', '5 wrong login codes', 'critical', { role: 'admin', u: ADMIN_USER }); return res.status(429).json({ error: 'Too many wrong codes. Please sign in again.', restart: true }); }
+    if (c.tries >= 5) { challenges.delete(String(req.body.challenge)); audit(req, 'admin_otp_failed', '5 wrong login codes', 'critical', { role: 'admin', u: ADMIN_USER() }); return res.status(429).json({ error: 'Too many wrong codes. Please sign in again.', restart: true }); }
     return res.status(400).json({ error: `Incorrect code. ${5 - c.tries} attempt(s) left.` });
   }
   challenges.delete(String(req.body.challenge));
-  setSession(res, { u: ADMIN_USER, role: 'admin' }, req);
-  audit(req, 'admin_login', 'password + mobile OTP', 'info', { role: 'admin', u: ADMIN_USER });
-  res.json({ ok: true, role: 'admin', redirect: '/admin' });
+  setSession(res, { u: ADMIN_USER(), role: 'admin' }, req);
+  audit(req, 'admin_login', 'password + mobile OTP', 'info', { role: 'admin', u: ADMIN_USER() });
+  res.json({ ok: true, role: 'admin', redirect: tenant.base() + '/admin' });
 });
 app.post('/api/admin/logout', (req, res) => {
   const t = readToken(req); if (t) audit(req, 'logout', '', 'info', { ...t, username: t.u });
-  res.setHeader('Set-Cookie', `adm=; Max-Age=0; ${cookieOpts}`);
+  res.setHeader('Set-Cookie', `${tenant.cookieName()}=; Max-Age=0; ${cookieOpts()}`);
   res.json({ ok: true });
 });
 
 // Who is signed in (for the on-screen watermark)
 app.get('/api/security/whoami', (req, res) => {
   const t = readToken(req); if (!t) return res.status(401).json({});
-  res.json({ role: t.role === 'sub' ? 'sub' : 'admin', name: t.role === 'sub' ? t.n : ADMIN_NAME, username: t.u, ip: req.ip, idleMinutes: Number(process.env.IDLE_MINUTES || 15) });
+  res.json({ role: t.role === 'sub' ? 'sub' : 'admin', name: t.role === 'sub' ? t.n : ADMIN_NAME(), username: t.u, ip: req.ip, idleMinutes: Number(process.env.IDLE_MINUTES || 15) });
 });
 // Copy / print / screenshot / right-click attempts reported by the dashboards
 const EVENTS = { copy: 'copy_attempt', cut: 'copy_attempt', paste: 'paste_attempt', print: 'print_attempt', screenshot: 'screenshot_attempt', contextmenu: 'right_click',
@@ -531,7 +550,23 @@ app.post('/api/security/event', eventLimiter, requireXhr, async (req, res) => {
   const isSub = t.role === 'sub';
   const sev = isSub ? (['copy_attempt', 'print_attempt', 'screenshot_attempt', 'developer_tools_opened', 'save_page_attempt', 'drag_data_attempt', 'select_all_attempt'].includes(action) ? 'high' : 'medium') : 'info';
   await audit(req, action, `${String(req.body.page || '').slice(0, 40)}${req.body.detail ? ' · ' + String(req.body.detail).slice(0, 80) : ''}`, sev, { ...t, username: t.u });
-  res.json({ ok: true, notified: SEVERE.has(sev) });
+  // Repeated attempts → the account is locked automatically and the admin is alerted
+  let locked = false;
+  if (isSub && sev === 'high') {
+    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const n = Number((await db.get("SELECT COUNT(*) AS n FROM audit_log WHERE user_id = $1 AND role = 'sub-admin' AND severity = 'high' AND at >= $2 AND action IN ('copy_attempt','print_attempt','screenshot_attempt','developer_tools_opened','save_page_attempt','drag_data_attempt','select_all_attempt')", [t.id, since])).n);
+    const limit = Number(await db.getSetting('auto_lock_after', 5));
+    if (limit > 0 && n >= limit) {
+      const u = await db.getUser(t.id);
+      if (u && Number(u.active)) {
+        await db.updateUser(u.id, { active: false });
+        await audit(req, 'account_auto_locked', `${u.name} (@${u.username}) locked after ${n} copy / screenshot attempts in 1 hour`, 'critical', { ...t, username: t.u });
+        res.setHeader('Set-Cookie', `${tenant.cookieName()}=; Max-Age=0; ${cookieOpts()}`);
+      }
+      locked = true;
+    }
+  }
+  res.json({ ok: true, notified: SEVERE.has(sev), locked });
 });
 
 app.get('/admin', requireAdmin, (_req, res) => sendView(res, 'admin.html'));
@@ -737,23 +772,24 @@ const genPassword = () => { const a = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrs
 app.get('/api/admin/security', requireAdmin, async (req, res) => {
   const [events, unseen, allowReveal, raw] = await Promise.all([db.listAudit({ limit: Math.min(1000, +req.query.limit || 400), severity: req.query.severity || undefined }),
     db.countUnseenAlerts(), db.getSetting('allow_reveal', false), db.rawSample(3)]);
-  res.json({ events, unseen, settings: { allowReveal, otpRequired: await otpOn(), adminSms: await adminSms(), studentMsgs: await studentMsgs() },
-    status: { adminName: ADMIN_NAME, encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA, adminSms: await adminSms(), alertEmailTo: sec.maskEmail(ALERT_EMAIL_TO), alertMobile: ADMIN_MOBILE ? sec.maskMobile(ADMIN_MOBILE) : '', alertEmail: !!mailer,
+  res.json({ events, unseen, settings: { autoLock: Number(await db.getSetting('auto_lock_after', 5)), allowReveal, otpRequired: await otpOn(), adminSms: await adminSms(), studentMsgs: await studentMsgs() },
+    status: { adminName: ADMIN_NAME(), encryption: 'AES-256-GCM (name, mobile, email, notes)', dataKey: !!process.env.DATA_KEY, twoFA: ADMIN_2FA(), adminSms: await adminSms(), alertEmailTo: sec.maskEmail(ALERT_EMAIL_TO()), alertMobile: ADMIN_MOBILE() ? sec.maskMobile(ADMIN_MOBILE()) : '', alertEmail: !!mailer,
       smsProvider: sms.provider, https: IS_PROD, sessionHours: SESSION_HOURS, idleMinutes: Number(process.env.IDLE_MINUTES || 15) },
     // what someone opening the database directly would see
     rawSample: raw.map((r) => ({ ref_no: r.ref_no, student_name: String(r.student_name || '').slice(0, 30) + '…', mobile: String(r.mobile || '').slice(0, 30) + '…' })) });
 });
 app.post('/api/admin/security/test-alert', requireAdmin, requireXhr, async (req, res) => {
-  const text = `Test alert from ${ADMIN_NAME} - security alerts are working`;
+  const text = `Test alert from ${ADMIN_NAME()} - security alerts are working`;
   const smsOn = await adminSms();
-  const out = { sms: !smsOn ? 'off (email only)' : ADMIN_MOBILE ? 'sent to +91 ' + sec.maskMobile(ADMIN_MOBILE) : 'no admin mobile set', email: 'not set up' };
-  if (ADMIN_MOBILE && smsOn) { const r = await sms.send('alert', ADMIN_MOBILE, { text }); out.sms = r.ok ? out.sms : 'SMS failed - check the SMS account balance'; }
-  if (mailer) { try { await sendAlertEmail(text); out.email = 'sent to ' + ALERT_EMAIL_TO; } catch (e) { out.email = 'failed: ' + e.message.slice(0, 120); } }
+  const out = { sms: !smsOn ? 'off (email only)' : ADMIN_MOBILE() ? 'sent to +91 ' + sec.maskMobile(ADMIN_MOBILE()) : 'no admin mobile set', email: 'not set up' };
+  if (ADMIN_MOBILE() && smsOn) { const r = await sms.send('alert', ADMIN_MOBILE(), { text }); out.sms = r.ok ? out.sms : 'SMS failed - check the SMS account balance'; }
+  if (mailer) { try { await sendAlertEmail(text); out.email = 'sent to ' + ALERT_EMAIL_TO(); } catch (e) { out.email = 'failed: ' + e.message.slice(0, 120); } }
   audit(req, 'test_alert', `SMS: ${out.sms} | Email: ${out.email}`, 'info');
   res.json(out);
 });
 app.post('/api/admin/security/seen', requireAdmin, requireXhr, async (_req, res) => { await db.markAlertsSeen(); res.json({ ok: true }); });
 app.patch('/api/admin/security/settings', requireAdmin, requireXhr, async (req, res) => {
+  if (req.body.autoLock !== undefined) { const n = [0, 3, 5, 10].includes(+req.body.autoLock) ? +req.body.autoLock : 5; await db.setSetting('auto_lock_after', n); audit(req, 'setting_changed', `auto-lock after copy / screenshot attempts: ${n || 'OFF'}`, 'medium'); }
   if (req.body.allowReveal !== undefined) { await db.setSetting('allow_reveal', !!req.body.allowReveal); audit(req, 'setting_changed', `counsellors can view numbers: ${!!req.body.allowReveal ? 'ON' : 'OFF'}`, 'medium'); }
   if (req.body.otpRequired !== undefined) { await db.setSetting('otp_required', !!req.body.otpRequired); audit(req, 'setting_changed', `student mobile OTP: ${req.body.otpRequired ? 'ON' : 'OFF'}`, 'medium'); }
   if (req.body.studentMsgs !== undefined) { await db.setSetting('student_msgs', !!req.body.studentMsgs); audit(req, 'setting_changed', `student confirmation SMS/WhatsApp: ${req.body.studentMsgs ? 'ON' : 'OFF'}`, 'medium'); }
@@ -778,7 +814,7 @@ app.post('/api/admin/users', requireAdmin, requireXhr, async (req, res) => {
   const name = clean(req.body.name, 60), username = clean(req.body.username, 30).toLowerCase(), mobile = String(req.body.mobile || '').replace(/\D/g, '').slice(-10);
   const password = String(req.body.password || '') || genPassword();
   if (name.length < 2) return res.status(400).json({ error: 'Please enter the full name.' });
-  if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === ADMIN_USER.toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
+  if (!/^[a-z0-9._-]{3,30}$/.test(username) || username === ADMIN_USER().toLowerCase()) return res.status(400).json({ error: 'Username: 3–30 letters, numbers, dot, dash or underscore.' });
   if (!/^[6-9]\d{9}$/.test(mobile)) return res.status(400).json({ error: "Enter a 10-digit WhatsApp mobile number for this account." });
   if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
   if (await db.getUserAuth(username)) return res.status(409).json({ error: 'That username is already taken.' });
@@ -827,8 +863,8 @@ app.patch('/api/admin/enquiries/:id', requireAdmin, requireXhr, async (req, res)
   }
   const before = await db.getEnquiry(id);
   const row = await db.updateEnquiry(id, upd);
-  if (before && upd.status && upd.status !== before.status) db.addEvent(id, ADMIN_NAME, 'status', `Status ${before.status} → ${upd.status}`).catch(() => {});
-  if (before && upd.counsellor_id !== undefined && before.counsellor_id !== upd.counsellor_id) db.addEvent(id, ADMIN_NAME, 'assign', upd.counsellor_name ? `Counsellor → ${upd.counsellor_name}` : 'Counsellor removed').catch(() => {});
+  if (before && upd.status && upd.status !== before.status) db.addEvent(id, ADMIN_NAME(), 'status', `Status ${before.status} → ${upd.status}`).catch(() => {});
+  if (before && upd.counsellor_id !== undefined && before.counsellor_id !== upd.counsellor_id) db.addEvent(id, ADMIN_NAME(), 'assign', upd.counsellor_name ? `Counsellor → ${upd.counsellor_name}` : 'Counsellor removed').catch(() => {});
   // newly assigned counsellor → tell the student whom to WhatsApp / call
   if (upd.counsellor_id && before && before.counsellor_id !== upd.counsellor_id) sendConfirmation(row).catch((e) => console.error('counsellor intro', e.message));
   res.json({ row });
@@ -842,7 +878,7 @@ app.post('/api/admin/assign', requireAdmin, requireXhr, async (req, res) => {
   let user = null;
   if (req.body.counsellor_id) { user = await db.getUser(parseInt(req.body.counsellor_id, 10)); if (!user || !Number(user.active)) return res.status(400).json({ error: 'Choose an active caller.' }); }
   const n = await db.assignMany(ids, user);
-  for (const id of ids) db.addEvent(id, ADMIN_NAME, 'assign', user ? `Calling → ${user.name}` : 'Caller removed').catch(() => {});
+  for (const id of ids) db.addEvent(id, ADMIN_NAME(), 'assign', user ? `Calling → ${user.name}` : 'Caller removed').catch(() => {});
   audit(req, 'calls_assigned', `${n} students → ${user ? user.name : 'no caller'}`, 'info');
   res.json({ ok: true, assigned: n, to: user ? user.name : null });
 });
@@ -993,7 +1029,7 @@ app.get('/api/admin/export.xlsx', requireAdmin, async (req, res) => {
   const cols = [['Sr.', 6], ...fields.map((x) => [x[1], x[2]])];
   ws.columns = cols.map(([, w]) => ({ width: w }));
   ws.mergeCells(1, 1, 1, cols.length);
-  ws.getCell('A1').value = `Ajeenkya DY Patil University, Pune — Admission Enquiries ${ACADEMIC_YEAR}`;
+  ws.getCell('A1').value = `Ajeenkya DY Patil University, Pune — Admission Enquiries ${ACADEMIC_YEAR()}`;
   ws.getCell('A1').font = { bold: true, size: 15, color: { argb: 'FFFFFFFF' } };
   ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } };
   ws.getCell('A1').alignment = { vertical: 'middle', horizontal: 'center' };
@@ -1070,7 +1106,7 @@ app.get('/api/admin/export.pdf', requireAdmin, async (req, res) => {
     doc.rect(0, 0, W, 64).fill(NAVY);
     doc.rect(0, 64, W, 4).fill(ORANGE);
     doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(17).text('Ajeenkya DY Patil University, Pune', L, 16);
-    doc.font('Helvetica').fontSize(10).fillColor('#FFD8A8').text(`Admission Enquiry Report  •  Academic Year ${ACADEMIC_YEAR}`, L, 38);
+    doc.font('Helvetica').fontSize(10).fillColor('#FFD8A8').text(`Admission Enquiry Report  •  Academic Year ${ACADEMIC_YEAR()}`, L, 38);
     doc.fillColor('#FFFFFF').fontSize(9).text(`Generated: ${fmtIST(new Date().toISOString())}`, L, 22, { width: R - L, align: 'right' });
   };
   header();
@@ -1182,7 +1218,7 @@ async function sendDigest(force) {
     `<tr><td style="padding:6px 10px;border-bottom:1px solid #eee">${n.replace(/[<&>]/g, '')}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;color:#b91c1c;font-weight:700">${c.u}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center;color:#c2410c">${c.o}</td><td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:center">${c.t}</td></tr>`).join('');
   const tile = (n, l, c) => `<td style="padding:12px;background:#f8fafc;border-radius:10px;text-align:center"><div style="font-size:26px;font-weight:700;color:${c}">${n}</div><div style="font-size:12px;color:#64748b">${l}</div></td>`;
   const text = `ADYPU admissions - daily summary ${today}: ${untouched.length} untouched for 24h+ (${noCaller.length} with no caller), ${overdue.length} overdue follow-ups, ${dueToday.length} follow-ups due today, ${fresh.length} new enquiries in the last 24h.`;
-  await mailer.sendMail({ to: ALERT_EMAIL_TO, subject: `ADYPU admissions · ${untouched.length} untouched · ${overdue.length} overdue · ${dueToday.length} due today`, text,
+  await mailer.sendMail({ to: ALERT_EMAIL_TO(), subject: `ADYPU admissions · ${untouched.length} untouched · ${overdue.length} overdue · ${dueToday.length} due today`, text,
     html: `<div style="font-family:Arial,sans-serif;max-width:620px"><div style="background:#0B1F4B;color:#fff;padding:14px 18px;border-radius:10px 10px 0 0"><b>ADYPU admissions - daily summary</b><div style="font-size:12px;color:#FFD8A8">${fmtDay(today)}</div></div>
       <div style="border:1px solid #e2e8f0;border-top:0;padding:18px;border-radius:0 0 10px 10px"><table style="width:100%;border-spacing:8px"><tr>${tile(untouched.length, 'Untouched 24h+', '#b91c1c')}${tile(overdue.length, 'Overdue follow-ups', '#c2410c')}${tile(dueToday.length, 'Due today', '#0B1F4B')}${tile(fresh.length, 'New in 24h', '#15803d')}</tr></table>
       ${noCaller.length ? `<p style="background:#fef2f2;color:#991b1b;padding:10px;border-radius:8px;font-size:13px">⚠ ${noCaller.length} untouched enquiries have <b>no caller assigned</b>. Open Enquiries → filter "Untouched" → Assign for calling.</p>` : ''}
@@ -1193,11 +1229,12 @@ async function sendDigest(force) {
 }
 setInterval(() => {
   const h = new Date(Date.now() + 5.5 * 3600e3).getUTCHours();
-  if (h >= 9 && h < 21) sendDigest(false).catch((e) => console.error('digest', e.message));
+  if (h >= 9 && h < 21) collegesApi.forEachCollege(() => sendDigest(false));
 }, 10 * 60 * 1000);
 
-require('./plus')(app, { db, sec, audit, notifyAdmin, requireAdmin, requireSub, requireXhr, readToken, getMailer: () => mailer, ALERT_EMAIL_TO, ADMIN_NAME, ADMIN_USER, STATUSES,
-  CALL_OUTCOMES, LEVELS, ACADEMIC_YEAR, CONTACTS, PUBLIC_URL, IS_PROD, teamRow, masked, counsellorOf, istToday, clean, sendView, bcrypt, genPassword, sms, express, rateLimit, QRCode, PDFDocument, ExcelJS, dupMessage, validDate });
+Object.assign(CC, { db, audit, requireAdmin, sendView, istToday, clean, bcrypt, genPassword, ExcelJS, setSession, PUBLIC_URL, ADMIN_NAME });
+require('./plus')(app, { forEachCollege: collegesApi.forEachCollege, loadCollege: (slug) => collegesApi.load(slug), db, sec, audit, notifyAdmin, requireAdmin, requireSub, requireXhr, readToken, getMailer: () => mailer, ALERT_EMAIL_TO, ADMIN_NAME, ADMIN_USER, STATUSES,
+  CALL_OUTCOMES, LEVELS, ACADEMIC_YEAR, CONTACTS, PUBLIC_URL, siteUrl, IS_PROD, teamRow, masked, counsellorOf, istToday, clean, sendView, bcrypt, genPassword, sms, express, rateLimit, QRCode, PDFDocument, ExcelJS, dupMessage, validDate });
 
 app.get('/api/mail/verify', (req, res) => {
   const n = mailNonces.get(String(req.query.n || '')); const to = String(req.query.to || '').toLowerCase();

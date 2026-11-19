@@ -6,6 +6,9 @@ const sec = require('./sec');
 
 const usePg = !!process.env.DATABASE_URL;
 let pool, sqlite;
+const tenant = require('./tenant');
+// the current college's database (default = the original ADYPU database)
+const P = () => { const t = tenant.als.getStore(); return t && t.pool ? t.pool : pool; };
 
 const COLS = 'id, ref_no, student_name, mobile, email, city, region, level, programme, branch, programme_group, course, status, notes, mobile_verified, sms_status, source, created_by_id, created_by_name, counsellor_id, counsellor_name, created_at, updated_at, next_action_date, last_call_at, last_call_outcome, call_count, caller_id, caller_name, caller_assigned_at, data_source, data_location, dup_of, app_status, admission_type, ai_attempts, ai_pending_at, ai_call_id';
 const NEW_COLS = [['city', 'TEXT'], ['region', 'TEXT'], ['mobile_verified', 'INTEGER DEFAULT 0'], ['sms_status', 'TEXT'], ['level', 'TEXT'], ['programme', 'TEXT'], ['branch', 'TEXT'],
@@ -45,28 +48,27 @@ const USERS_SQLITE = `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY A
 
 async function init() {
   if (usePg) {
-    const { Pool } = require('pg');
-    pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: false } });
-    await pool.query(`CREATE TABLE IF NOT EXISTS enquiries (
+    if (!tenant.als.getStore() && !pool) pool = makePool();
+    await P().query(`CREATE TABLE IF NOT EXISTS enquiries (
       id SERIAL PRIMARY KEY, ref_no TEXT UNIQUE, student_name TEXT NOT NULL, mobile TEXT NOT NULL, email TEXT,
       programme_group TEXT NOT NULL, course TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'New', notes TEXT DEFAULT '',
       source TEXT DEFAULT 'web', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-    for (const [c, t] of NEW_COLS) await pool.query(`ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS ${c} ${t}`);
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_enq_created ON enquiries(created_at)');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_enq_mobile ON enquiries(mobile)');
-    await pool.query(`CREATE TABLE IF NOT EXISTS otps (mobile TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires_at BIGINT NOT NULL,
+    for (const [c, t] of NEW_COLS) await P().query(`ALTER TABLE enquiries ADD COLUMN IF NOT EXISTS ${c} ${t}`);
+    await P().query('CREATE INDEX IF NOT EXISTS idx_enq_created ON enquiries(created_at)');
+    await P().query('CREATE INDEX IF NOT EXISTS idx_enq_mobile ON enquiries(mobile)');
+    await P().query(`CREATE TABLE IF NOT EXISTS otps (mobile TEXT PRIMARY KEY, code_hash TEXT NOT NULL, expires_at BIGINT NOT NULL,
       attempts INTEGER NOT NULL DEFAULT 0, sends INTEGER NOT NULL DEFAULT 0, window_start BIGINT NOT NULL, last_sent BIGINT NOT NULL)`);
-    await pool.query(USERS_PG);
-    await pool.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'counsellor'");
-    await pool.query(AUDIT_PG);
-    await pool.query('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_enq_mhash ON enquiries(mobile_hash)');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at)');
-    await pool.query(CALLS_PG);
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_calls_enq ON calls(enquiry_id)');
-    await pool.query('CREATE INDEX IF NOT EXISTS idx_enq_next ON enquiries(next_action_date)');
-    await pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id INTEGER');
-    for (const t of EXTRA_TABLES()) await pool.query(t);
+    await P().query(USERS_PG);
+    await P().query("ALTER TABLE users ADD COLUMN IF NOT EXISTS kind TEXT DEFAULT 'counsellor'");
+    await P().query(AUDIT_PG);
+    await P().query('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)');
+    await P().query('CREATE INDEX IF NOT EXISTS idx_enq_mhash ON enquiries(mobile_hash)');
+    await P().query('CREATE INDEX IF NOT EXISTS idx_audit_at ON audit_log(at)');
+    await P().query(CALLS_PG);
+    await P().query('CREATE INDEX IF NOT EXISTS idx_calls_enq ON calls(enquiry_id)');
+    await P().query('CREATE INDEX IF NOT EXISTS idx_enq_next ON enquiries(next_action_date)');
+    await P().query('ALTER TABLE users ADD COLUMN IF NOT EXISTS parent_id INTEGER');
+    for (const t of EXTRA_TABLES()) await P().query(t);
   } else {
     let Database;
     try { Database = require('better-sqlite3'); } catch {
@@ -98,6 +100,7 @@ async function init() {
   await migrateProgrammes();
   await migrateEncryption();
   await migrateDuplicates();
+  if (!tenant.als.getStore()) await initRegistry();
   console.log(`Storage: ${usePg ? 'PostgreSQL' : 'SQLite (local file)'}`);
 }
 
@@ -151,9 +154,9 @@ async function findSameStudent(mobile, email) {
 }
 
 const q = (sql) => (usePg ? sql : sql.replace(/\$\d+/g, '?'));
-async function all(sql, params = []) { return usePg ? (await pool.query(sql, params)).rows : sqlite.prepare(q(sql)).all(...params); }
+async function all(sql, params = []) { return usePg ? (await P().query(sql, params)).rows : sqlite.prepare(q(sql)).all(...params); }
 async function get(sql, params = []) { return (await all(sql, params))[0]; }
-async function run(sql, params = []) { return usePg ? pool.query(sql, params) : sqlite.prepare(q(sql)).run(...params); }
+async function run(sql, params = []) { return usePg ? P().query(sql, params) : sqlite.prepare(q(sql)).run(...params); }
 
 const norm = (r) => r && ({ ...r, student_name: sec.decrypt(r.student_name), mobile: sec.decrypt(r.mobile), email: sec.decrypt(r.email), notes: sec.decrypt(r.notes) || '', mobile_verified: !!Number(r.mobile_verified), call_count: Number(r.call_count || 0), ai_attempts: Number(r.ai_attempts || 0), created_at: new Date(r.created_at).toISOString(), updated_at: new Date(r.updated_at).toISOString() });
 
@@ -168,10 +171,10 @@ async function insertEnquiry(e) {
   const same = await findSameStudent(e.mobile, e.email); if (same) vals[cols.indexOf('dup_of')] = same.dup_of || same.id;
   const ph = cols.map((_, i) => `$${i + 1}`).join(',');
   let id;
-  if (usePg) id = (await pool.query(`INSERT INTO enquiries (${cols.join(',')}) VALUES (${ph}) RETURNING id`, vals)).rows[0].id;
+  if (usePg) id = (await P().query(`INSERT INTO enquiries (${cols.join(',')}) VALUES (${ph}) RETURNING id`, vals)).rows[0].id;
   else id = sqlite.prepare(`INSERT INTO enquiries (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals).lastInsertRowid;
   const yr = new Date().getFullYear().toString().slice(-2);
-  await run('UPDATE enquiries SET ref_no = $1 WHERE id = $2', [`ADYPU-${yr}-${String(id).padStart(5, '0')}`, id]);
+  await run('UPDATE enquiries SET ref_no = $1 WHERE id = $2', [`${tenant.cur().short}-${yr}-${String(id).padStart(5, '0')}`, id]);
   return getEnquiry(id);
 }
 async function getEnquiry(id) { return norm(await get(`SELECT ${COLS} FROM enquiries WHERE id = $1`, [id])); }
@@ -293,7 +296,7 @@ async function callStats(sinceIso) {
 async function getOtp(mobile) { return get('SELECT * FROM otps WHERE mobile = $1', [sec.blind(mobile)]); }
 async function saveOtp(o) {
   if (usePg) {
-    await pool.query(`INSERT INTO otps (mobile, code_hash, expires_at, attempts, sends, window_start, last_sent) VALUES ($1,$2,$3,$4,$5,$6,$7)
+    await P().query(`INSERT INTO otps (mobile, code_hash, expires_at, attempts, sends, window_start, last_sent) VALUES ($1,$2,$3,$4,$5,$6,$7)
       ON CONFLICT (mobile) DO UPDATE SET code_hash=$2, expires_at=$3, attempts=$4, sends=$5, window_start=$6, last_sent=$7`,
     [sec.blind(o.mobile), o.code_hash, o.expires_at, o.attempts, o.sends, o.window_start, o.last_sent]);
   } else {
@@ -309,7 +312,7 @@ const normU = (u) => u && ({ id: u.id, name: u.name, username: u.username, mobil
   created_at: u.created_at && new Date(u.created_at).toISOString(), last_login: u.last_login ? new Date(u.last_login).toISOString() : null });
 async function createUser({ name, username, mobile, pass_hash, kind, parent_id }) {
   const now = new Date().toISOString(), k = ['caller', 'ai'].includes(kind) ? kind : 'counsellor';
-  if (usePg) return normU((await pool.query('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind, parent_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [name, username, sec.encrypt(mobile), pass_hash, now, k, parent_id || null])).rows[0]);
+  if (usePg) return normU((await P().query('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind, parent_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *', [name, username, sec.encrypt(mobile), pass_hash, now, k, parent_id || null])).rows[0]);
   const id = sqlite.prepare('INSERT INTO users (name, username, mobile, pass_hash, created_at, kind, parent_id) VALUES (?,?,?,?,?,?,?)').run(name, username, sec.encrypt(mobile), pass_hash, now, k, parent_id || null).lastInsertRowid;
   return getUser(id);
 }
@@ -346,7 +349,7 @@ async function countUnseenAlerts() { return Number((await get("SELECT COUNT(*) A
 async function markAlertsSeen() { await run('UPDATE audit_log SET seen = 1 WHERE seen = 0'); }
 async function getSetting(key, def) { const r = await get('SELECT value FROM settings WHERE key = $1', [key]); return r ? JSON.parse(r.value) : def; }
 async function setSetting(key, value) {
-  if (usePg) await pool.query('INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = $2', [key, JSON.stringify(value)]);
+  if (usePg) await P().query('INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value = $2', [key, JSON.stringify(value)]);
   else sqlite.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)').run(key, JSON.stringify(value));
 }
 // Raw rows exactly as stored (used by the Security tab to prove data is encrypted at rest)
@@ -357,7 +360,7 @@ async function addEvent(enquiry_id, actor, kind, text) { await run('INSERT INTO 
 async function listEvents(enquiry_id) { return all('SELECT * FROM timeline WHERE enquiry_id = $1 ORDER BY id DESC LIMIT 200', [enquiry_id]); }
 async function insertRow(table, obj) {
   const cols = Object.keys(obj), vals = Object.values(obj), ph = cols.map((_, i) => `$${i + 1}`).join(',');
-  if (usePg) return (await pool.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${ph}) RETURNING id`, vals)).rows[0].id;
+  if (usePg) return (await P().query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${ph}) RETURNING id`, vals)).rows[0].id;
   return sqlite.prepare(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`).run(...vals).lastInsertRowid;
 }
 async function updateRow(table, id, obj) {
@@ -372,4 +375,30 @@ async function mergeInto(keepId, dropId) {
   await run('UPDATE enquiries SET call_count = (SELECT COUNT(*) FROM calls WHERE enquiry_id = $1) WHERE id = $2', [keepId, keepId]);
 }
 
-module.exports = { all, get, run, addEvent, listEvents, insertRow, updateRow, mergeInto, relinkDuplicates, findSameStudent, latestFeedback, assignMany, logCall, listCalls, callStats, insertAudit, listAudit, countUnseenAlerts, markAlertsSeen, getSetting, setSetting, rawSample, getEnquiry, findExisting, createUser, getUser, getUserAuth, listUsers, updateUser, touchLogin, init, insertEnquiry, findRecentDuplicate, listEnquiries, updateEnquiry, deleteEnquiry, getOtp, saveOtp, bumpOtpAttempts, clearOtp, usePg };
+// ---------- multi-college: one PostgreSQL database per college ----------
+function makePool(dbName, max) {
+  const { Pool } = require('pg');
+  let cs = process.env.DATABASE_URL;
+  if (dbName) { const u = new URL(cs); u.pathname = '/' + dbName; cs = u.toString(); }
+  return new Pool({ connectionString: cs, max: max || (dbName ? 3 : 10), idleTimeoutMillis: 30000, ssl: process.env.PGSSL === 'disable' ? false : { rejectUnauthorized: false } });
+}
+async function createDatabase(dbName) {
+  if (!/^crm_[a-z0-9_]{2,40}$/.test(dbName)) throw new Error('bad database name');
+  const ex = await pool.query('SELECT 1 FROM pg_database WHERE datname = $1', [dbName]);
+  if (!ex.rows.length) await pool.query(`CREATE DATABASE "${dbName}"`);
+}
+// the college registry lives in the original (platform) database
+async function initRegistry() {
+  if (!usePg) return;
+  await pool.query(`CREATE TABLE IF NOT EXISTS tenants (id SERIAL PRIMARY KEY, slug TEXT UNIQUE NOT NULL, name TEXT NOT NULL, short TEXT NOT NULL, db_name TEXT NOT NULL,
+    config TEXT, logo TEXT, admin_user TEXT NOT NULL, admin_hash TEXT NOT NULL, admin_name TEXT, admin_email TEXT, admin_mobile TEXT, status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+}
+const registry = {
+  all: async () => (await pool.query('SELECT * FROM tenants ORDER BY id')).rows,
+  get: async (slug) => (await pool.query('SELECT * FROM tenants WHERE slug = $1', [slug])).rows[0] || null,
+  insert: async (t) => { const cols = Object.keys(t); await pool.query(`INSERT INTO tenants (${cols.join(',')}) VALUES (${cols.map((_, i) => '$' + (i + 1)).join(',')})`, Object.values(t)); },
+  update: async (slug, t) => { const cols = Object.keys(t); if (!cols.length) return; await pool.query(`UPDATE tenants SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(', ')}, updated_at = NOW() WHERE slug = $${cols.length + 1}`, [...Object.values(t), slug]); },
+};
+
+module.exports = { makePool, createDatabase, initRegistry, registry, usePg: () => usePg, all, get, run, addEvent, listEvents, insertRow, updateRow, mergeInto, relinkDuplicates, findSameStudent, latestFeedback, assignMany, logCall, listCalls, callStats, insertAudit, listAudit, countUnseenAlerts, markAlertsSeen, getSetting, setSetting, rawSample, getEnquiry, findExisting, createUser, getUser, getUserAuth, listUsers, updateUser, touchLogin, init, insertEnquiry, findRecentDuplicate, listEnquiries, updateEnquiry, deleteEnquiry, getOtp, saveOtp, bumpOtpAttempts, clearOtp, usePg };

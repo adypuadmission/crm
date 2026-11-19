@@ -4,7 +4,7 @@
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const api = (url, opts = {}) => fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch', ...(opts.headers || {}) } })
-    .then(async (r) => { if (r.status === 401) { location.href = '/admin/login'; throw new Error('auth'); } const j = await r.json().catch(() => ({})); return { ok: r.ok, ...j }; });
+    .then(async (r) => { if (r.status === 401) { location.href = (window.__b || '') + '/admin/login'; throw new Error('auth'); } const j = await r.json().catch(() => ({})); return { ok: r.ok, ...j }; });
   const fmt = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
   const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
   const toast = (m) => { const t = $('#toast'); if (!t) return alert(m); t.textContent = m; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), 3200); };

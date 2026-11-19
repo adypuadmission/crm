@@ -1,7 +1,7 @@
 (() => {
   const $ = (s) => document.querySelector(s);
   const api = (url, opts = {}) => fetch(url, { ...opts, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch', ...(opts.headers || {}) } })
-    .then(async (r) => { if (r.status === 401) { location.href = '/admin/login'; throw new Error('auth'); } return r.json(); });
+    .then(async (r) => { if (r.status === 401) { location.href = (window.__b || '') + '/admin/login'; throw new Error('auth'); } return r.json(); });
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fmt = (iso) => new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   const istDay = (d) => new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
@@ -588,7 +588,7 @@
   $('#expAll').addEventListener('change', (e) => { document.querySelectorAll('#expFields input').forEach((x) => { x.checked = e.target.checked; }); syncExp(); });
   $('#expReset').addEventListener('click', () => { document.querySelectorAll('#expFields input').forEach((x) => { x.checked = DEF.includes(x.value); }); syncExp(); });
   $('#expSearch').addEventListener('input', (e) => { const q = e.target.value.toLowerCase(); document.querySelectorAll('#expFields .ef').forEach((l) => { l.hidden = q && !l.textContent.toLowerCase().includes(q); }); });
-  const download = (kind) => { const f = picked(); if (!f.length) return toast('Tick at least one column'); location.href = `/api/admin/export.${kind}?${params()}&fields=${f.join(',')}`; $('#expModal').hidden = true; toast('⬇ Download started · the admin alert email has been sent'); };
+  const download = (kind) => { const f = picked(); if (!f.length) return toast('Tick at least one column'); location.href = (window.__b || '') + `/api/admin/export.${kind}?${params()}&fields=${f.join(',')}`; $('#expModal').hidden = true; toast('⬇ Download started · the admin alert email has been sent'); };
   $('#expXlsx').addEventListener('click', () => download('xlsx'));
   $('#expPdf').addEventListener('click', () => download('pdf'));
   $('#dlBtn').addEventListener('click', openExport);
@@ -614,7 +614,7 @@
   async function loadSecurity() {
     const r = await fetch('/api/admin/security?' + new URLSearchParams({ severity: $('#secSev').value }), { headers: { 'X-Requested-With': 'fetch' } });
     if (!r.ok) return; const j = await r.json();
-    setAlerts(j.unseen); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired; $('#adminSms').checked = !!j.settings.adminSms; $('#studentMsgs').checked = !!j.settings.studentMsgs;
+    setAlerts(j.unseen); $('#autoLock').value = String(j.settings.autoLock ?? 5); $('#allowReveal').checked = !!j.settings.allowReveal; $('#otpRequired').checked = !!j.settings.otpRequired; $('#adminSms').checked = !!j.settings.adminSms; $('#studentMsgs').checked = !!j.settings.studentMsgs;
     const st = j.status, ok = (b) => (b ? '✅' : '⚠️');
     $('#secStatus').innerHTML = [
       [true, `Encryption at rest: <b>${esc(st.encryption)}</b>`], [st.dataKey, st.dataKey ? 'Dedicated encryption key (DATA_KEY) set' : 'Set a dedicated <code>DATA_KEY</code> in the server settings'],
@@ -650,6 +650,10 @@
   $('#otpRequired').addEventListener('change', async (e) => {
     await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ otpRequired: e.target.checked }) });
     toast(e.target.checked ? 'Student OTP verification is ON' : 'Student OTP verification is OFF — students can submit without OTP'); loadSecurity();
+  });
+  $('#autoLock').addEventListener('change', async (e) => {
+    await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ autoLock: e.target.value }) });
+    toast(e.target.value === '0' ? 'Auto-lock off — attempts are still reported' : `🔒 Staff accounts lock after ${e.target.value} attempts in an hour`);
   });
   $('#allowReveal').addEventListener('change', async (e) => {
     await fetch('/api/admin/security/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' }, body: JSON.stringify({ allowReveal: e.target.checked }) });
@@ -815,7 +819,7 @@
   });
   $('#userForm').username.addEventListener('input', (e) => { e.target.value = e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''); });
 
-  $('#logout').addEventListener('click', async () => { await api('/api/admin/logout', { method: 'POST' }); location.href = '/admin/login'; });
+  $('#logout').addEventListener('click', async () => { await api('/api/admin/logout', { method: 'POST' }); location.href = (window.__b || '') + '/admin/login'; });
 
   const clock = () => { $('#liveClock').textContent = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', hour: '2-digit', minute: '2-digit' }) + ' IST'; };
   clock(); setInterval(clock, 30000);
