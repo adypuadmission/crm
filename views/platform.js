@@ -200,7 +200,7 @@
 
   async function openWizard(slug) {
     EDIT = slug || null; slugTouched = false; $('#contacts').innerHTML = ''; ROWS = []; setLogo('');
-    $$('.pf-step input:not([type=file]):not([type=color]), .pf-step textarea', wiz).forEach((i) => { i.value = ''; });
+    $$('.pf-step input:not([type=file]):not([type=color]):not([type=radio]), .pf-step textarea', wiz).forEach((i) => { i.value = ''; });
     $('#fAY').value = '2027–28'; $('#aUser').value = 'admin'; $('input[name=ctype][value=regular]').checked = true; $('#fColor').value = '#0B1F4B'; $('#typeBox').hidden = true;
     $('#fSlug').disabled = !!EDIT; $('#wizTitle').textContent = EDIT ? '✏️ Edit college' : '➕ Create a college';
     if (EDIT) {

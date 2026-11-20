@@ -17,7 +17,7 @@ const LISTS = {
 };
 // common spellings in old sheets → DEB wording (shown to the admin in the import preview)
 const NORMAL = {
-  category: { open: 'General', gen: 'General', general: 'General', obc: 'OBC', sc: 'SC', st: 'ST', ews: 'EWS', nt: 'OBC', sbc: 'OBC', vjnt: 'OBC' },
+  category: { open: 'General', gen: 'General', general: 'General', 'general / open': 'General', 'open / general': 'General', obc: 'OBC', sc: 'SC', st: 'ST', ews: 'EWS' },
   govId: { 'adhar card': 'Aadhaar', 'aadhar card': 'Aadhaar', 'aadhaar card': 'Aadhaar', adhar: 'Aadhaar', aadhar: 'Aadhaar', aadhaar: 'Aadhaar', passport: 'Passport', pan: 'PAN', 'pan card': 'PAN', 'voter id': 'Voter ID', 'driving licence': 'Driving Licence', 'driving license': 'Driving Licence' },
   locality: { urban: 'Urban', rural: 'Rural' },
   nationality: { indian: 'Indian', india: 'Indian' },
@@ -86,7 +86,7 @@ module.exports = function deb(app, C) {
   const FIELDS = ['name', 'programme', 'abc_id', 'deb_id', 'gender', 'dob', 'email', 'enrollment_no', 'admission_date', 'admission_details', 'category', 'locality', 'nationality', 'gov_id_type', 'gov_id_no', 'country'];
   function fromInput(b, old = {}) {
     const l = { ...old };
-    for (const k of FIELDS) if (b[k] !== undefined) l[k] = b[k];
+    for (const k of FIELDS) if (b[k] !== undefined && k !== 'gov_id_no') l[k] = b[k]; // ID number: blank = keep the saved one
     l.name = clean(l.name, 100); l.abc_id = pad12(l.abc_id); l.deb_id = pad12(l.deb_id);
     l.gender = clean(l.gender, 12).toUpperCase(); l.dob = ddmmyyyy(l.dob) || clean(l.dob, 12); l.email = clean(l.email, 120).toLowerCase();
     l.enrollment_no = clean(l.enrollment_no, 40); l.admission_date = ddmmyyyy(l.admission_date) || clean(l.admission_date, 12); l.admission_details = clean(l.admission_details, 100);
@@ -139,7 +139,7 @@ module.exports = function deb(app, C) {
   app.get('/api/deb/status', ...guard, async (_req, res) => {
     await ensure(); const c = await conf();
     const counts = Object.fromEntries((await db.all('SELECT status, COUNT(*) AS n FROM deb_learners GROUP BY status')).map((x) => [x.status, Number(x.n)]));
-    res.json({ ol: true, configured: !!(c.heiCode && c.admission && c.admission.clientId), deadline: c.deadline || '', counts, lists: LISTS, base: DEB_BASE.replace(/^https?:\/\//, '').split('/')[0] });
+    res.json({ ol: true, configured: !!(c.heiCode && c.admission && c.admission.clientId), deadline: c.deadline || '', counts, lists: LISTS, base: process.env.DEB_BASE ? 'the DEB portal (test connection)' : DEB_BASE.replace(/^https?:\/\//, '').split('/')[0] });
   });
   app.get('/api/deb/settings', ...guard, async (_req, res) => {
     const c = await conf(), m = (x) => (x && x.clientId ? { clientId: x.clientId, apiKey: '••••••' + String(x.apiKey).slice(-3) } : null);
