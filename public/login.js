@@ -16,12 +16,12 @@ f.addEventListener('submit', async (e) => {
         challenge = j.challenge; otpStep.hidden = false; f.username.disabled = f.password.disabled = true;
         document.getElementById('otpMsg').textContent = `A 6-digit login code was sent to ${j.sentTo}.` + (j.demoOtp ? ` (Demo mode code: ${j.demoOtp})` : '');
         btn.textContent = 'Verify & sign in'; f.otp.focus();
-      } else if (j.ok) { location.href = j.redirect || '/admin'; return; }
+      } else if (j.ok) { try { sessionStorage.setItem('crmJustLoggedIn', '1'); } catch {} location.href = j.redirect || '/admin'; return; }
       else { err.textContent = j.error || 'Login failed'; btn.textContent = 'Sign in'; }
     } else {
       btn.textContent = 'Verifying…';
       const j = await post('/api/admin/login/verify', { challenge, otp: f.otp.value });
-      if (j.ok) { location.href = j.redirect || '/admin'; return; }
+      if (j.ok) { try { sessionStorage.setItem('crmJustLoggedIn', '1'); } catch {} location.href = j.redirect || '/admin'; return; }
       err.textContent = j.error || 'Incorrect code';
       if (j.restart) reset(); else btn.textContent = 'Verify & sign in';
     }

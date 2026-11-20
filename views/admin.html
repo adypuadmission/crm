@@ -299,6 +299,20 @@
         <div class="raw" id="rawSample"></div>
       </article>
     </div>
+    <article class="card" id="apiCard">
+      <header class="ch"><div><b>🔌 API keys — connect other portals</b><small>Let your website, a partner portal or another CRM push students straight into this system. Only the main admin can create keys.</small></div>
+        <div class="ch-actions"><a class="btn ghost" id="apiDocs" href="/api/v1/docs" target="_blank" rel="noopener">📘 API guide</a> <button class="btn primary" id="apiNew" type="button">➕ New API key</button></div></header>
+      <form class="api-new" id="apiForm" hidden autocomplete="off">
+        <label>Key name<input id="apiName" maxlength="60" placeholder="e.g. College website, Partner portal" required></label>
+        <label>Allowed IP addresses <small>(optional, comma separated)</small><input id="apiIps" maxlength="300" placeholder="Leave empty = any server"></label>
+        <label class="api-chk"><input type="checkbox" id="apiRead"> Also allow reading a student's status by reference no. (no phone / email is ever returned)</label>
+        <label>Confirm your admin password<input id="apiPass" type="password" autocomplete="current-password" required></label>
+        <div class="api-btns"><button class="btn primary" type="submit">🔐 Create key</button> <button class="btn ghost" type="button" id="apiCancel">Cancel</button></div>
+      </form>
+      <div class="api-once" id="apiOnce" hidden></div>
+      <div class="table-wrap"><table class="sec-table api-table"><thead><tr><th>Name</th><th>Key</th><th>Permission</th><th>Allowed IPs</th><th>Created</th><th>Last used</th><th>Students added</th><th></th></tr></thead><tbody id="apiRows"></tbody></table></div>
+      <p class="cc-hint">Endpoint: <code id="apiEndpoint"></code> · A key works only for this college · 300 calls / 15 min · every call is in the Security log · revoke = stops at once.</p>
+    </article>
     <article class="card">
       <header class="ch"><div><b>🚨 Security log</b><small id="secSum"></small></div>
         <div class="ch-actions"><select id="secSev"><option value="">All events</option><option value="high">⚠ Alerts only</option></select>
@@ -313,5 +327,6 @@
 <script src="/panel.js"></script>
 <script src="/help.js"></script>
 <script src="/admin/admin.js"></script>
+<script src="/api-keys.js"></script>
 </body>
 </html>

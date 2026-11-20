@@ -1,5 +1,10 @@
 (() => {
   const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  // SELF = a college's own admin editing its own profile (/c/<code>/admin/profile); otherwise the platform owner
+  const SELF = document.body.classList.contains('self');
+  const PROFILE = (slug) => (SELF ? '/api/college/profile' : `/api/platform/colleges/${slug}`);
+  const PROGS = (slug) => (SELF ? '/api/college/programmes' : `/api/platform/colleges/${slug}/programmes`);
+  const PARSE = SELF ? '/api/college/parse-programmes' : '/api/platform/parse-programmes';
   const api = (url, opts = {}) => fetch(url, { ...opts, headers: { 'X-Requested-With': 'fetch', ...(opts.body && typeof opts.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...(opts.headers || {}) } })
     .then(async (r) => { if (r.status === 401) { location.href = '/admin/login'; throw new Error('auth'); } const j = await r.json().catch(() => ({})); return { ok: r.ok, ...j }; });
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -8,7 +13,7 @@
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const toast = (m) => { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('show'), 3200); };
   const ago = (iso) => { if (!iso) return 'no enquiries yet'; const h = (Date.now() - new Date(iso)) / 36e5; return h < 1 ? 'last enquiry < 1 h ago' : h < 48 ? `last enquiry ${Math.round(h)} h ago` : `last enquiry ${Math.round(h / 24)} days ago`; };
-  setInterval(() => { $('#liveClock').textContent = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }, 1000);
+  setInterval(() => { const lc = $('#liveClock'); if (lc) lc.textContent = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }); }, 1000);
   $('#logout').addEventListener('click', async () => { await api('/api/admin/logout', { method: 'POST' }); location.href = '/admin/login'; });
 
   let DATA = { colleges: [], origin: location.origin };
@@ -70,7 +75,7 @@
           <div class="pf-c-name"><b>${esc(c.name)}</b><small>${esc(c.city || '')}${c.main ? ' · main portal' : ` · ${c.programmes} programmes`}</small></div>
           <span class="pf-st ${c.status === 'active' ? 'on' : ''}">${c.status === 'active' ? '● Live' : '⏸ Suspended'}</span></div>
         ${c.error ? `<div class="pf-err">⚠ ${esc(c.error)}</div>` : `<div class="pf-c-stats"><div><b>${num(s.total)}</b><small>Enquiries</small></div><div><b>${num(s.today)}</b><small>Today</small></div><div><b>${num(s.admitted)}</b><small>Admitted</small></div><div><b>${pct(s.admitted, s.total)}%</b><small>Conversion</small></div></div>
-        ${spark(s.trend)}<div class="pf-c-meta">${esc(ago(s.lastAt))}${s.untouched ? ` · <span class="warn">${s.untouched} waiting for a call</span>` : ''}</div>`}
+        ${spark(s.trend)}<div class="pf-c-meta">${esc(ago(s.lastAt))}${s.apiKeys ? ` · 🔌 ${s.apiKeys} API key${s.apiKeys > 1 ? 's' : ''}` : ''}${s.untouched ? ` · <span class="warn">${s.untouched} waiting for a call</span>` : ''}</div>`}
         <div class="pf-c-link"><code>${esc(full(c.links.form))}</code><button class="btn ghost xs copy" data-u="${esc(full(c.links.form))}" type="button">📋 Copy</button></div>
         <div class="pf-c-act">
           <button class="btn primary xs open" type="button">📊 Open dashboard</button>
@@ -144,7 +149,7 @@
   $('#clearRows').addEventListener('click', () => { if (!ROWS.length || confirm('Remove all programme rows from this list?')) { ROWS = []; drawRows(); } });
   async function parse(kind, body, type) {
     toast('⏳ Reading programmes…');
-    const j = await api('/api/platform/parse-programmes?kind=' + kind, { method: 'POST', body, headers: { 'Content-Type': type } });
+    const j = await api(PARSE + '?kind=' + kind, { method: 'POST', body, headers: { 'Content-Type': type } });
     if (!j.ok) return toast(j.error || 'Could not read');
     if (!j.rows.length) return toast('No programmes found — please check the file or type them.');
     const key = (r) => [r.level, r.programme, r.branch].join('|').toLowerCase(), have = new Set(ROWS.map(key));
@@ -161,7 +166,7 @@
     $$('#steps li').forEach((li, i) => { li.classList.toggle('on', i + 1 === n); li.classList.toggle('done', i + 1 < n); });
     $('#back').hidden = n === 1 || n === 4; $('#next').textContent = n === 4 ? 'Close' : n === 3 || (EDIT && n === 2) ? (EDIT ? '💾 Save changes' : '🚀 Create college') : 'Next →';
     $('#wizErr').textContent = '';
-    $('#steps li:nth-child(3)').hidden = !!EDIT;
+    $('#steps li:nth-child(3)').hidden = !!EDIT; $('#steps li:nth-child(4)').hidden = !!EDIT;
   }
   const val = (s) => $(s).value.trim();
   function check(n) {
@@ -177,14 +182,15 @@
   $('#back').addEventListener('click', () => showStep(step - 1));
   $('#next').addEventListener('click', async () => {
     if (step === 4) { wiz.hidden = true; return; }
+    if (SELF && step === 1) { const err0 = check(1); if (err0) { $('#wizErr').textContent = err0; return; } }
     const err = check(step); if (err) { $('#wizErr').textContent = err; return; }
     const last = EDIT ? 2 : 3;
     if (step < last) return showStep(step + 1);
     $('#next').disabled = true; $('#next').textContent = EDIT ? 'Saving…' : 'Creating the college and its database…';
-    const j = EDIT ? await api(`/api/platform/colleges/${EDIT}`, { method: 'PUT', body: JSON.stringify(payload()) }) : await api('/api/platform/colleges', { method: 'POST', body: JSON.stringify(payload()) });
+    const j = EDIT ? await api(PROFILE(EDIT), { method: 'PUT', body: JSON.stringify(payload()) }) : await api('/api/platform/colleges', { method: 'POST', body: JSON.stringify(payload()) });
     $('#next').disabled = false;
     if (!j.ok) { $('#wizErr').textContent = j.error || 'Something went wrong'; showStep(step); $('#wizErr').textContent = j.error || 'Something went wrong'; return; }
-    if (EDIT) { wiz.hidden = true; toast('💾 Saved'); load(); return; }
+    if (EDIT) { toast('💾 Saved — students see the new details at once'); if (SELF) { setTimeout(() => { location.href = (window.__b || '') + '/admin'; }, 1200); return; } wiz.hidden = true; load(); return; }
     $('#done').innerHTML = `<div class="pf-done"><div class="pf-big">🎉</div><h3>${esc(val('#fName'))} is live!</h3><p class="muted">It has its own database, its own links and its own admin login.</p>
       <div class="pf-links">${[['📝 Student enquiry form', j.links.form], ['🔐 Admin login', j.links.admin], ['📱 QR poster (print)', j.links.poster]].map(([l, u]) => `<div><b>${l}</b><code>${esc(u)}</code><button class="btn ghost xs copy2" data-u="${esc(u)}" type="button">📋</button></div>`).join('')}</div>
       <div class="pf-cred"><b>Admin username:</b> <code>${esc(j.adminUser)}</code><br><b>Password:</b> <code>${esc(j.password)}</code> <button class="btn ghost xs copy2" data-u="${esc(j.password)}" type="button">📋</button><br><small>⚠ Copy the password now — it is shown only once. The admin can be given a new one anytime with “Reset admin password”.</small></div></div>`;
@@ -198,7 +204,7 @@
     $('#fAY').value = '2027–28'; $('#aUser').value = 'admin'; $('#fColor').value = '#0B1F4B'; $('#typeBox').hidden = true;
     $('#fSlug').disabled = !!EDIT; $('#wizTitle').textContent = EDIT ? '✏️ Edit college' : '➕ Create a college';
     if (EDIT) {
-      const [a, b] = await Promise.all([api(`/api/platform/colleges/${slug}`), api(`/api/platform/colleges/${slug}/programmes`)]);
+      const [a, b] = await Promise.all([api(PROFILE(slug)), api(PROGS(slug))]);
       if (!a.ok) return toast(a.error || 'Could not load');
       const c = a.college;
       Object.entries({ '#fName': c.name, '#fShort': c.short, '#fSlug': c.slug, '#fCity': c.city, '#fAddress': c.address, '#fEmail': c.email, '#fPhone': c.phone, '#fWebsite': c.website, '#fAY': c.academicYear, '#fFeeYear': c.feeYear, '#fTagline': c.tagline, '#aName': c.adminName, '#aEmail': c.adminEmail, '#aMobile': c.adminMobile })
@@ -206,6 +212,16 @@
       $('#fColor').value = c.color || '#0B1F4B'; setLogo(c.logo); (c.contacts || []).forEach(contactRow); ROWS = b.rows || [];
     } else contactRow();
     drawRows(); showStep(1); wiz.hidden = false; $('#fName').focus();
+  }
+  if (SELF) {
+    // college admin: only the edit wizard, opened straight away; closing returns to the dashboard
+    document.body.classList.add('self');
+    $('.tb-brand b').textContent = 'College profile'; $('.tb-brand small').textContent = 'Name, logo, contacts, programmes & fees — what students see';
+    $('.tb-actions').innerHTML = '<a class="btn ghost" href="/admin">← Back to dashboard</a>';
+    $('.pf-main').hidden = true; $('.pf-imp[href]').setAttribute('href', '/api/college/template.xlsx');
+    $$('[data-close]', wiz).forEach((b) => b.addEventListener('click', () => { location.href = (window.__b || '') + '/admin'; }));
+    openWizard('self'); $('#wizTitle').textContent = '🏫 College profile';
+    return;
   }
   $('#newCollege').addEventListener('click', () => openWizard());
   load();

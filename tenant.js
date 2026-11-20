@@ -22,6 +22,7 @@ function brand(text) {
     .replace(/Ajeenkya DY Patil University, Pune/g, `${t.name}${t.city ? ', ' + t.city : ''}`)
     .replace(/Ajeenkya DY Patil University/g, t.name)
     .replace(/Ajeenkya D\.?Y\.? Patil University/g, t.name)
+    .replace(/Ajeenkya\s+D\.?\s?Y\.?\s+Patil\s+University/gi, t.name)
     .replace(/ADYPU/g, t.short)
     .replace(/info@adypu\.edu\.in/g, t.email || '')
     .replace(/D Y Patil Knowledge City · Pune/g, t.city || '');

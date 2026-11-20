@@ -33,6 +33,7 @@
         <div class="help-stages"><b>A student's journey</b><div>${STAGES.map((s, i) => `<span>${s}</span>${i < STAGES.length - 1 ? '<i>→</i>' : ''}`).join('')}</div>
           <small>🔥 Hot · 🌤 Warm · ❄ Cold — the colour tag on each student shows how likely they are to join.</small></div>
         <p class="small muted">🔒 Everything you do is recorded. Phone numbers are shown only to the people allowed to call. Never share your password.</p>
+        <div class="help-go"><small>This guide opens after every login · reopen it any time with ❓ Help</small><button class="btn primary" type="button" data-close>✅ Got it — start working</button></div>
       </div></div></div>`;
   document.body.insertAdjacentHTML('beforeend', html);
   const show = (r) => {
@@ -42,8 +43,8 @@
   document.getElementById('helpFab').addEventListener('click', () => { show(detect()); document.getElementById('helpModal').hidden = false; });
   document.getElementById('helpModal').addEventListener('click', (e) => {
     const b = e.target.closest('.help-tabs button'); if (b) return show(b.dataset.r);
-    if (e.target.matches('[data-close]') || e.target.id === 'helpModal') document.getElementById('helpModal').hidden = true;
+    if (e.target.closest('[data-close]') || e.target.id === 'helpModal') document.getElementById('helpModal').hidden = true;
   });
-  // first visit: open the guide once
-  try { if (!localStorage.getItem('crmHelpSeen')) { localStorage.setItem('crmHelpSeen', '1'); setTimeout(() => document.getElementById('helpFab').click(), 1200); } } catch {}
+  // open the guide right after every login (admin, counsellor, caller); closing it starts work
+  try { if (sessionStorage.getItem('crmJustLoggedIn')) { sessionStorage.removeItem('crmJustLoggedIn'); setTimeout(() => document.getElementById('helpFab').click(), 700); } } catch {}
 })();

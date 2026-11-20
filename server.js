@@ -28,7 +28,7 @@ function sendView(res, name) {
     viewCache[name] = fs.readFileSync(path.join(__dirname, 'views', name), 'utf8')
       .replace(/(href|src)="(\/[^"?]+\.(?:css|js))"/g, `$1="$2?v=${ASSET_V}"`);
   }
-  res.set('Cache-Control', 'no-cache').type('html').send(T() && CC.brandHtml ? CC.brandHtml(viewCache[name]) : viewCache[name]);
+  res.set('Cache-Control', 'no-cache').type('html').send(T() && CC.brandHtml ? CC.brandHtml(viewCache[name], res.req) : viewCache[name]);
 }
 // Public address of the site, used inside QR codes. Set PUBLIC_URL() (e.g. https://admissions.adypu.edu.in) once you have a domain.
 const DEF_PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
@@ -130,7 +130,8 @@ app.use(require('compression')());
 // Colleges platform: /c/<code>/… runs the same CRM for another college with its own database (see colleges.js)
 const CC = { express, requireXhr };
 const collegesApi = require('./colleges')(app, CC);
-app.use(express.json({ limit: '20kb' }));
+const jsonSmall = express.json({ limit: '20kb' });
+app.use((req, res, next) => (req.path === '/api/v1/enquiries' ? next() : jsonSmall(req, res, next))); // the API route parses larger batches itself
 // Never let browsers or proxies cache private pages, data or exports
 app.use(['/admin', '/team', '/api/admin', '/api/team', '/api/security'], (_req, res, next) => { res.set('Cache-Control', 'no-store, private'); res.set('Pragma', 'no-cache'); next(); });
 if (IS_PROD) app.use((req, res, next) => (req.secure || req.get('x-forwarded-proto') === 'https' || req.path === '/healthz' ? next() : res.redirect(301, `https://${req.get('host')}${req.originalUrl}`)));
@@ -200,7 +201,7 @@ function requireAdmin(req, res, next) {
   if (t && (t.role || 'admin') === 'admin') { req.user = { role: 'admin', name: ADMIN_NAME(), u: ADMIN_USER() }; return next(); }
   if (t && t.role === 'sub') {
     audit(req, 'blocked_admin_access', `${req.method} ${req.originalUrl.split('?')[0]}`, 'high', { ...t, username: t.u });
-    return req.originalUrl.startsWith('/api/') ? res.status(403).json({ error: 'You do not have permission for this. The admin has been notified.' }) : res.redirect('/team');
+    return req.url.startsWith('/api/') ? res.status(403).json({ error: 'You do not have permission for this. The admin has been notified.' }) : res.redirect('/team');
   }
   if (req.sessionMismatch) audit(req, 'session_used_from_other_device', `${req.sessionMismatch.u || ''}`, 'high', { ...req.sessionMismatch, username: req.sessionMismatch.u });
   return deny(req, res);
@@ -282,7 +283,7 @@ app.get('/qr-poster.pdf', async (req, res) => {
   const owner = ref ? await db.getUserAuth(ref) : null;
   const url = formUrl(req, owner && Number(owner.active) ? ref : '');
   const png = await QRCode.toBuffer(url, { errorCorrectionLevel: 'M', margin: 1, width: 900, color: { dark: '#0B1F4B', light: '#FFFFFF' } });
-  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: 'ADYPU Admission Enquiry - Scan QR', Author: 'ADYPU Admission Desk' } });
+  const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: tenant.brand('ADYPU Admission Enquiry - Scan QR'), Author: tenant.brand('ADYPU Admission Desk') } });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `inline; filename="ADYPU_Admission_QR_Poster${owner ? '_' + ref : ''}.pdf"`);
   doc.pipe(res);
@@ -290,7 +291,14 @@ app.get('/qr-poster.pdf', async (req, res) => {
   doc.rect(0, 0, W, 200).fill(NAVY);
   doc.circle(W - 30, 20, 120).fillOpacity(0.28).fill(ORANGE).fillOpacity(1);
   doc.circle(20, 110, 70).fillOpacity(0.14).fill('#3B82F6').fillOpacity(1);
-  doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(12).text('AJEENKYA DY PATIL UNIVERSITY  ·  PUNE', 0, 46, { width: W, align: 'center', characterSpacing: 2 });
+  // header: the college's own name (and logo) — never another college's
+  const tc = tenant.cur(), headTxt = `${tc.name}${tc.city ? '  ·  ' + tc.city : ''}`.toUpperCase();
+  let logoBuf = null;
+  if (T() && T().hasLogo) { try { const r = await db.registry.get(T().slug); const b64 = String(r.logo || '').split(',')[1]; if (b64) logoBuf = Buffer.from(b64, 'base64'); } catch (e) { console.error('poster logo', e.message); } }
+  const tx = logoBuf ? 104 : 0, tw = logoBuf ? W - 208 : W;
+  let hs = 12; doc.font('Helvetica-Bold'); while (hs > 7 && doc.fontSize(hs).widthOfString(headTxt, { characterSpacing: 2 }) > tw - 30) hs -= 0.5;
+  doc.fillColor('#FFD8A8').font('Helvetica-Bold').fontSize(hs).text(headTxt, tx, 46, { width: tw, align: 'center', characterSpacing: 2, lineBreak: false });
+  if (logoBuf) { try { doc.roundedRect(28, 26, 64, 64, 14).fill('#FFFFFF'); doc.image(logoBuf, 32, 30, { fit: [56, 56], align: 'center', valign: 'center' }); } catch (e) { console.error('poster logo', e.message); } }
   doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(34).text('Your next chapter', 0, 78, { width: W, align: 'center' });
   doc.fillColor(ORANGE).text('begins here.', 0, 118, { width: W, align: 'center' });
   doc.fillColor('#DBE4FF').font('Helvetica').fontSize(13).text(`Admissions ${ACADEMIC_YEAR().replace('–', '-')}  ·  UG & PG  ·  Free counselling`, 0, 164, { width: W, align: 'center' });
@@ -1232,7 +1240,21 @@ setInterval(() => {
   if (h >= 9 && h < 21) collegesApi.forEachCollege(() => sendDigest(false));
 }, 10 * 60 * 1000);
 
-Object.assign(CC, { db, audit, requireAdmin, sendView, istToday, clean, bcrypt, genPassword, ExcelJS, setSession, PUBLIC_URL, ADMIN_NAME });
+Object.assign(CC, { readToken, db, audit, requireAdmin, sendView, istToday, clean, bcrypt, genPassword, ExcelJS, setSession, PUBLIC_URL, ADMIN_NAME });
+// ---------- API keys: other portals push students in (see integrations.js) ----------
+async function pushFromApi(s, key) {
+  const body = { ...s, consent: true, data_source: clean(s.source || key.name, 80), data_location: clean(s.location, 80), notes: s.remarks };
+  if (!clean(body.city, 60) && body.data_location) body.city = String(body.data_location).split(',')[0];
+  const { errors, data } = validateEnquiry(body);
+  if (Object.keys(errors).length) return { errors };
+  const dup = await db.findSameStudent(data.mobile, null);
+  if (dup) { await db.addEvent(dup.id, 'API · ' + key.name, 'created', `Sent again by ${key.name} — not saved as a new entry${dup.course !== data.course ? ' · also interested in ' + data.course : ''}`); return { duplicate: dup }; }
+  let row = await db.insertEnquiry({ ...data, source: 'api', notes: clean(s.remarks, 500) || null, data_source: body.data_source || null, data_location: body.data_location || null });
+  db.addEvent(row.id, 'API · ' + key.name, 'created', `Added through the API key "${key.name}"${body.data_source ? ' · source: ' + body.data_source : ''}`).catch(() => {});
+  if (!row.caller_id) { const u = await autoAssign(row); if (u) { await db.assignMany([row.id], u); row = await db.getEnquiry(row.id); } }
+  return { row };
+}
+require('./integrations')(app, { db, audit, requireAdmin, requireXhr, express, bcrypt, clean, notifyAdmin, siteUrl, LEVELS, pushFromApi, SECRET: SESSION_SECRET, ADMIN_HASH });
 require('./plus')(app, { forEachCollege: collegesApi.forEachCollege, loadCollege: (slug) => collegesApi.load(slug), db, sec, audit, notifyAdmin, requireAdmin, requireSub, requireXhr, readToken, getMailer: () => mailer, ALERT_EMAIL_TO, ADMIN_NAME, ADMIN_USER, STATUSES,
   CALL_OUTCOMES, LEVELS, ACADEMIC_YEAR, CONTACTS, PUBLIC_URL, siteUrl, IS_PROD, teamRow, masked, counsellorOf, istToday, clean, sendView, bcrypt, genPassword, sms, express, rateLimit, QRCode, PDFDocument, ExcelJS, dupMessage, validDate });
 

@@ -79,11 +79,14 @@ module.exports = function colleges(app, C) {
   }
 
   // ---------- pages for a college: same screens, its own name / logo / links ----------
-  const STATIC = /^\/(style\.css|app\.js|admin\.css|guard\.js|panel\.js|help\.js|login\.js|apply\.js|apply\.css|tenant-shim\.js|favicon[^"]*|fonts\/)/;
-  function brandHtml(html) {
+  const STATIC = /^\/(style\.css|app\.js|admin\.css|guard\.js|panel\.js|help\.js|login\.js|apply\.js|apply\.css|tenant-shim\.js|api-keys\.js|platform\.css|favicon[^"]*|fonts\/)/;
+  function brandHtml(html, req) {
     const t = tenant.cur(), b = tenant.base();
-    let h = tenant.brand(html).replace(/\s*<a [^>]*id="platformLink"[^>]*>[^<]*<\/a>/, '')
-      .replace(/(href|src|action)="(\/[^"]*)"/g, (all, attr, url) => (STATIC.test(url) || url.startsWith(b + '/') ? all : `${attr}="${b}${url}"`))
+    const tok = req && C.readToken ? C.readToken(req) : null;
+    // in a college: "All colleges" becomes "College profile" (+ a way back for the platform owner)
+    const links = `<a class="btn ghost" id="profileLink" href="${b}/admin/profile" title="Edit name, logo, contacts, programmes and fees">🏫 College profile</a>${tok && tok.sup ? ' <a class="btn ghost" href="/platform" title="Back to all colleges">↩ All colleges</a>' : ''}`;
+    let h = tenant.brand(html).replace(/<a [^>]*id="platformLink"[^>]*>[^<]*<\/a>/, links)
+      .replace(/(href|src|action)="(\/[^"]*)"/g, (all, attr, url) => (STATIC.test(url) || url.startsWith(b + '/') || url === '/platform' ? all : `${attr}="${b}${url}"`))
       .replace('<head>', `<head>\n<meta name="t-base" content="${b}">\n<script src="/tenant-shim.js"></script>`);
     if (t.hasLogo) h = h.replace(/<span class="crest( sm)?">[^<]*<\/span>/g, `<span class="crest$1 logo"><img src="${b}/logo" alt=""></span>`).replace(/<div class="crest">🎓<\/div>/, `<div class="crest logo"><img src="${b}/logo" alt=""></div>`);
     return h;
@@ -107,6 +110,16 @@ module.exports = function colleges(app, C) {
 
   // ---------- platform owner: all colleges ----------
   const requireOwner = (req, res, next) => (tenant.isDefault() ? C.requireAdmin(req, res, next) : res.status(404).end());
+  // a college's own main admin edits its own profile at /c/<code>/admin/profile (same screen, "self" mode)
+  const requireSelf = (req, res, next) => (tenant.isDefault() ? res.status(404).end() : C.requireAdmin(req, res, next));
+  const isSelf = (req) => req.path.startsWith('/api/college/');
+  const either = (req, res, next) => (isSelf(req) ? requireSelf : requireOwner)(req, res, next);
+  const slugOf = (req) => (isSelf(req) ? tenant.cur().slug : req.params.slug);
+  app.get('/admin/profile', requireSelf, (_req, res) => {
+    const h = fs.readFileSync(path.join(__dirname, 'views', 'platform.html'), 'utf8').replace('<body class="pf">', '<body class="pf self">').replace('<script src="/platform/platform.js"></script>', '<script src="/admin/profile.js"></script>');
+    res.set('Cache-Control', 'no-store').type('html').send(brandHtml(h));
+  });
+  app.get('/admin/profile.js', requireSelf, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'platform.js')));
   app.get('/platform', requireOwner, (_req, res) => C.sendView(res, 'platform.html'));
   app.get('/platform/platform.js', requireOwner, (_req, res) => res.sendFile(path.join(__dirname, 'views', 'platform.js')));
 
@@ -123,7 +136,8 @@ module.exports = function colleges(app, C) {
       const byStatus = await db.all('SELECT status, COUNT(*) AS n FROM enquiries GROUP BY status');
       const trend = await db.all("SELECT to_char(created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS d, COUNT(*) AS n FROM enquiries WHERE created_at >= $1 GROUP BY 1 ORDER BY 1", [new Date(Date.now() - 14 * 864e5).toISOString()]);
       const untouched = await one("SELECT COUNT(*) AS n FROM enquiries WHERE status = 'New' AND COALESCE(call_count,0) = 0 AND created_at < $1", [new Date(Date.now() - 864e5).toISOString()]);
-      return { total, today: todayN, week, admitted, apps, paid, collected, team, untouched, lastAt: lastAt && lastAt.at ? new Date(lastAt.at).toISOString() : null,
+      const apiKeys = ((await db.getSetting('api_keys', [])) || []).filter((k) => !k.revokedAt).length;
+      return { apiKeys, total, today: todayN, week, admitted, apps, paid, collected, team, untouched, lastAt: lastAt && lastAt.at ? new Date(lastAt.at).toISOString() : null,
         byStatus: Object.fromEntries(byStatus.map((x) => [x.status, Number(x.n)])), trend: trend.map((x) => ({ d: x.d, n: Number(x.n) })) };
     };
     return dbCtx ? tenant.als.run(dbCtx, run) : run();
@@ -139,14 +153,34 @@ module.exports = function colleges(app, C) {
     }
     res.json({ colleges: list, origin: C.PUBLIC_URL() || `${req.protocol}://${req.get('host')}` });
   });
-  app.get('/api/platform/colleges/:slug', requireOwner, async (req, res) => {
-    const r = await db.registry.get(req.params.slug); if (!r) return res.status(404).json({ error: 'Not found' });
+  app.get(['/api/platform/colleges/:slug', '/api/college/profile'], either, async (req, res) => {
+    const r = await db.registry.get(slugOf(req)); if (!r) return res.status(404).json({ error: 'Not found' });
     const cfg = JSON.parse(r.config || '{}');
     res.json({ college: { slug: r.slug, name: r.name, short: r.short, status: r.status, logo: r.logo || '', adminUser: r.admin_user, adminName: r.admin_name, adminEmail: r.admin_email, adminMobile: r.admin_mobile, ...cfg } });
   });
 
+  // --- one Excel sheet comparing every college ---
+  app.get('/api/platform/report.xlsx', requireOwner, async (req, res) => {
+    const j = { colleges: [] };
+    j.colleges.push({ name: tenant.DEFAULT.name, short: tenant.DEFAULT.short, status: 'active', link: '/', stats: await statsFor(null) });
+    for (const r of await db.registry.all()) { let st = null; try { st = await statsFor(await load(r.slug)); } catch { /* shown as blank */ } j.colleges.push({ name: r.name, short: r.short, status: r.status, link: `/c/${r.slug}/`, stats: st }); }
+    const wb = new C.ExcelJS.Workbook(), ws = wb.addWorksheet('All colleges');
+    const origin = C.PUBLIC_URL() || `${req.protocol}://${req.get('host')}`;
+    ws.columns = [['College', 38], ['Code', 10], ['Status', 11], ['Enquiries', 11], ['Today', 8], ['Last 7 days', 11], ['Admitted', 10], ['Conversion %', 13], ['Forms submitted', 15], ['Paid', 8], ['Fees collected (₹)', 18], ['Team accounts', 14], ['Waiting 24h+', 13], ['API keys', 10], ['Last enquiry', 20], ['Form link', 46]].map(([header, width]) => ({ header, width }));
+    for (const c of j.colleges) { const s = c.stats || {};
+      ws.addRow([c.name, c.short, c.status, s.total, s.today, s.week, s.admitted, s.total ? Math.round((s.admitted / s.total) * 1000) / 10 : 0, s.apps, s.paid, s.collected, s.team, s.untouched, s.apiKeys, s.lastAt ? new Date(s.lastAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : '', origin + c.link]); }
+    const tot = ws.addRow(['TOTAL', '', '', ...[4, 5, 6, 7].map((i) => ({ formula: `SUM(${String.fromCharCode(64 + i)}2:${String.fromCharCode(64 + i)}${j.colleges.length + 1})` })), '', ...[9, 10, 11, 12, 13].map((i) => ({ formula: `SUM(${String.fromCharCode(64 + i)}2:${String.fromCharCode(64 + i)}${j.colleges.length + 1})` }))]);
+    tot.font = { bold: true };
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } }; ws.views = [{ state: 'frozen', ySplit: 1 }];
+    ws.getColumn(11).numFmt = '#,##0';
+    C.audit(req, 'platform_report_downloaded', `${j.colleges.length} colleges`, 'medium');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="All_Colleges_Report_${new Date().toISOString().slice(0, 10)}.xlsx"`);
+    await wb.xlsx.write(res); res.end();
+  });
+
   // --- programmes from Excel / PDF / typed text → rows for a preview the owner can edit ---
-  app.post('/api/platform/parse-programmes', requireOwner, C.requireXhr, C.express.raw({ type: () => true, limit: '8mb' }), async (req, res) => {
+  app.post(['/api/platform/parse-programmes', '/api/college/parse-programmes'], either, C.requireXhr, C.express.raw({ type: () => true, limit: '8mb' }), async (req, res) => {
     try {
       const kind = String(req.query.kind || 'text');
       let rows = [];
@@ -280,9 +314,10 @@ module.exports = function colleges(app, C) {
     const origin = C.PUBLIC_URL() || `${req.protocol}://${req.get('host')}`;
     res.json({ ok: true, slug, password, adminUser, links: { form: `${origin}/c/${slug}/`, admin: `${origin}/c/${slug}/admin/login`, poster: `${origin}/c/${slug}/qr-poster.pdf` } });
   });
-  app.put('/api/platform/colleges/:slug', requireOwner, C.requireXhr, C.express.json({ limit: '1mb' }), async (req, res) => {
-    const r = await db.registry.get(req.params.slug); if (!r) return res.status(404).json({ error: 'Not found' });
-    const b = req.body || {}, upd = {};
+  app.put(['/api/platform/colleges/:slug', '/api/college/profile'], either, C.requireXhr, C.express.json({ limit: '1mb' }), async (req, res) => {
+    const r = await db.registry.get(slugOf(req)); if (!r) return res.status(404).json({ error: 'Not found' });
+    const b = { ...(req.body || {}) }, upd = {};
+    if (isSelf(req)) { delete b.status; delete b.resetPassword; } // a college cannot suspend itself; password resets stay with the platform owner
     if (b.status !== undefined) upd.status = b.status === 'active' ? 'active' : 'suspended';
     if (b.name !== undefined) {
       const c = readCollege({ ...JSON.parse(r.config || '{}'), ...b, programmes: b.programmes || catalogueRows(JSON.parse(r.config || '{}').catalogue) });
@@ -300,8 +335,8 @@ module.exports = function colleges(app, C) {
     res.json({ ok: true, password });
   });
   const catalogueRows = (cat) => Object.entries(cat || {}).flatMap(([lv, list]) => list.flatMap(([school, name, , specs]) => specs.map(([branch, fee]) => ({ level: lv, school, programme: name, branch, fee }))));
-  app.get('/api/platform/colleges/:slug/programmes', requireOwner, async (req, res) => {
-    const r = await db.registry.get(req.params.slug); if (!r) return res.status(404).json({ error: 'Not found' });
+  app.get(['/api/platform/colleges/:slug/programmes', '/api/college/programmes'], either, async (req, res) => {
+    const r = await db.registry.get(slugOf(req)); if (!r) return res.status(404).json({ error: 'Not found' });
     res.json({ rows: catalogueRows(JSON.parse(r.config || '{}').catalogue) });
   });
   // the platform owner opens a college's dashboard (signed in as that college's admin; recorded in its log)
@@ -314,7 +349,7 @@ module.exports = function colleges(app, C) {
       res.json({ ok: true, url: `/c/${ctx.slug}/admin` });
     });
   });
-  app.get('/api/platform/template.xlsx', requireOwner, async (_req, res) => {
+  app.get(['/api/platform/template.xlsx', '/api/college/template.xlsx'], either, async (_req, res) => {
     const wb = new C.ExcelJS.Workbook(), ws = wb.addWorksheet('Programmes');
     ws.columns = [['Level (UG/PG)', 14], ['School', 30], ['Programme', 22], ['Specialisation', 34], ['Annual Fee (₹)', 16]].map(([header, width]) => ({ header, width }));
     ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0B1F4B' } };
