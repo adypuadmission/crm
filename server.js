@@ -28,7 +28,9 @@ function sendView(res, name) {
     viewCache[name] = fs.readFileSync(path.join(__dirname, 'views', name), 'utf8')
       .replace(/(href|src)="(\/[^"?]+\.(?:css|js))"/g, `$1="$2?v=${ASSET_V}"`);
   }
-  res.set('Cache-Control', 'no-cache').type('html').send(T() && CC.brandHtml ? CC.brandHtml(viewCache[name], res.req) : viewCache[name]);
+  // the DEB tab exists only in Online Learning colleges — removed from the page everywhere else
+  const html = T() && T().type === 'ol' ? viewCache[name] : viewCache[name].replace(/<!--DEB-->[\s\S]*?<!--\/DEB-->/g, '');
+  res.set('Cache-Control', 'no-cache').type('html').send(T() && CC.brandHtml ? CC.brandHtml(html, res.req) : html);
 }
 // Public address of the site, used inside QR codes. Set PUBLIC_URL() (e.g. https://admissions.adypu.edu.in) once you have a domain.
 const DEF_PUBLIC_URL = (process.env.PUBLIC_URL || '').replace(/\/$/, '');
@@ -1255,6 +1257,7 @@ async function pushFromApi(s, key) {
   return { row };
 }
 require('./integrations')(app, { db, audit, requireAdmin, requireXhr, express, bcrypt, clean, notifyAdmin, siteUrl, LEVELS, pushFromApi, SECRET: SESSION_SECRET, ADMIN_HASH });
+require('./deb')(app, { db, sec, audit, requireAdmin, requireXhr, express, bcrypt, ExcelJS, LEVELS, ADMIN_HASH }); // Online Learning colleges only
 require('./plus')(app, { forEachCollege: collegesApi.forEachCollege, loadCollege: (slug) => collegesApi.load(slug), db, sec, audit, notifyAdmin, requireAdmin, requireSub, requireXhr, readToken, getMailer: () => mailer, ALERT_EMAIL_TO, ADMIN_NAME, ADMIN_USER, STATUSES,
   CALL_OUTCOMES, LEVELS, ACADEMIC_YEAR, CONTACTS, PUBLIC_URL, siteUrl, IS_PROD, teamRow, masked, counsellorOf, istToday, clean, sendView, bcrypt, genPassword, sms, express, rateLimit, QRCode, PDFDocument, ExcelJS, dupMessage, validDate });
 

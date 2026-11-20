@@ -79,3 +79,9 @@
 .api-doc .card{padding:26px 30px;line-height:1.6}.api-doc h1{font-family:Fraunces,serif;color:var(--navy);margin-top:0}.api-doc h2{color:var(--navy);font-size:17px;margin:22px 0 6px}
 .api-doc pre{background:#0B1F4B;color:#e2e8f0;padding:14px;border-radius:12px;overflow:auto;font-size:12.5px;white-space:pre-wrap;word-break:break-all}
 .api-t{min-width:0;margin:10px 0;font-size:13.5px}.api-t th,.api-t td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left}
+.pf-type{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:640px){.pf-type{grid-template-columns:1fr}}
+.pf-tc{display:flex!important;gap:10px;align-items:flex-start;border:1.5px solid var(--line);border-radius:14px;padding:12px;cursor:pointer;font-weight:400!important}
+.pf-tc input{width:auto!important;margin-top:3px}.pf-tc b{display:block;color:var(--navy);font-size:14px}.pf-tc small{color:var(--muted);font-size:12px;line-height:1.4}
+.pf-tc:has(input:checked){border-color:var(--orange);background:#fff7ed}
+.pf-ol{display:inline-block;margin-top:3px;font-size:11px;font-weight:700;color:#6d28d9;background:#ede9fe;border-radius:12px;padding:2px 8px}

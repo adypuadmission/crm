@@ -584,3 +584,31 @@ details.fees{margin-top:12px}details.fees summary{cursor:pointer;padding:6px 0}
 .api-key-row{display:flex;gap:8px;align-items:center}.api-key-row code{flex:1;background:#fff;padding:8px 10px;border-radius:8px;word-break:break-all;user-select:all}
 .api-table{min-width:900px}.api-off{opacity:.5}
 .help-go{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:12px;margin-top:6px}.help-go small{color:var(--muted)}
+/* DEB tab (Online Learning colleges) */
+.deb-hero{display:grid;gap:12px}.deb-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.deb-head b{color:var(--navy);font-size:16px;display:block}.deb-head small{color:var(--muted)}
+.deb-deadline{text-align:right;background:#eff6ff;border-radius:12px;padding:8px 12px;min-width:150px}.deb-deadline b{font-size:22px;color:var(--navy);margin-right:4px}.deb-deadline small{display:block;color:var(--muted);font-size:11.5px}
+.deb-deadline.urgent{background:#fef2f2}.deb-deadline.urgent b{color:#b91c1c}
+.deb-steps{display:flex;gap:8px;list-style:none;margin:0;padding:0;flex-wrap:wrap}.deb-steps li{padding:6px 12px;border-radius:20px;background:#f1f5f9;color:var(--muted);font-weight:600;font-size:13px}
+.deb-steps li b{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#fff;margin-right:4px;font-size:11px}
+.deb-steps li.on{background:var(--navy);color:#fff}.deb-steps li.on b{color:var(--navy)}.deb-steps li.done{background:#dcfce7;color:#15803d}
+.deb-kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}@media (max-width:900px){.deb-kpis{grid-template-columns:repeat(3,1fr)}}
+.deb-kpis div{background:#f8fafc;border-radius:12px;padding:8px 10px;display:grid;grid-template-columns:auto 1fr;column-gap:8px}.deb-kpis span{grid-row:span 2;font-size:20px;align-self:center}.deb-kpis b{font-size:19px;color:var(--navy)}.deb-kpis small{color:var(--muted);font-size:11.5px}
+.deb-conn{display:grid;gap:12px;margin-top:6px}.deb-g3{display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:12px;align-items:end}.deb-g2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:800px){.deb-g3,.deb-g2{grid-template-columns:1fr}}
+.deb-conn label,.deb-form label{display:grid;gap:4px;font-size:12.5px;font-weight:600;color:var(--navy)}.deb-conn label small,.deb-form label small,.deb-sub small,.deb-conn legend small{font-weight:400;color:var(--muted)}
+.deb-conn input:not([type=checkbox]),.deb-conn select,.deb-form input,.deb-form select,.deb-bar input,.deb-bar select{border:1px solid var(--line);border-radius:10px;padding:8px 10px;font:inherit;font-weight:400}
+.deb-conn fieldset{border:1px solid var(--line);border-radius:12px;padding:10px 12px;display:grid;gap:8px}.deb-conn legend{font-weight:700;color:var(--navy);font-size:13px;padding:0 4px}
+.deb-chk{display:flex!important;align-items:center;gap:8px;font-weight:500!important}.deb-sub{color:var(--navy);font-size:13.5px}
+.deb-map{min-width:0}.deb-map td{padding:5px 8px}.deb-map input,.deb-map select{width:100%;box-sizing:border-box}
+.deb-save{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.deb-save label{flex:1;min-width:220px}
+.deb-actions{display:flex;gap:6px;flex-wrap:wrap}.deb-actions label.btn{cursor:pointer}
+.deb-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 10px}.deb-bar input{flex:1;min-width:180px}.deb-sel{color:var(--muted);font-size:13px}
+.deb-table{min-width:1100px;font-size:13px}.deb-table td{vertical-align:top}.deb-table code{font-size:12px}
+.deb-chip{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:12px;background:#f1f5f9}.deb-chip.ok{background:#dcfce7;color:#15803d}.deb-chip.done{background:#dbeafe;color:#1d4ed8}.deb-chip.bad{background:#fee2e2;color:#b91c1c}.deb-chip.warn{background:#ffedd5;color:#c2410c}
+.deb-v{font-size:11.5px;color:var(--muted)}.deb-v.ok{color:#15803d}.deb-v.bad{color:#b91c1c}
+.deb-iss{margin:0;padding-left:16px;color:#c2410c;font-size:12px}.deb-note{max-width:300px;font-size:12.5px}.bad{color:#b91c1c}.ok{color:#15803d}
+.deb-empty{text-align:center;padding:22px!important}
+.deb-form{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px}@media (max-width:640px){.deb-form{grid-template-columns:1fr}}
+.deb-fbtns{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;margin-top:8px}
+.deb-prev{max-height:50vh;overflow:auto}.deb-prev table{min-width:0;font-size:12.5px}.deb-prev td{vertical-align:top;padding:5px 8px;border-bottom:1px solid #f1f5f9}.deb-prev .fix{color:#c2410c}
+.deb-res{font-size:15px;margin-bottom:8px}.deb-reslist{list-style:none;padding:0;margin:0;display:grid;gap:4px;max-height:50vh;overflow:auto;font-size:13px}

@@ -72,10 +72,10 @@
       const s = c.stats || {}, full = (p) => DATA.origin + p;
       return `<article class="pf-card ${c.status !== 'active' ? 'off' : ''}" data-slug="${esc(c.slug)}">
         <div class="pf-c-top"><div class="pf-c-logo">${c.logo ? `<img src="/c/${esc(c.slug)}/logo" alt="">` : c.main ? '🎓' : esc(c.short.slice(0, 3))}</div>
-          <div class="pf-c-name"><b>${esc(c.name)}</b><small>${esc(c.city || '')}${c.main ? ' · main portal' : ` · ${c.programmes} programmes`}</small></div>
+          <div class="pf-c-name"><b>${esc(c.name)}</b><small>${esc(c.city || '')}${c.main ? ' · main portal' : ` · ${c.programmes} programmes`}</small>${c.type === 'ol' ? '<span class="pf-ol">🌐 Online Learning · DEB</span>' : ''}</div>
           <span class="pf-st ${c.status === 'active' ? 'on' : ''}">${c.status === 'active' ? '● Live' : '⏸ Suspended'}</span></div>
         ${c.error ? `<div class="pf-err">⚠ ${esc(c.error)}</div>` : `<div class="pf-c-stats"><div><b>${num(s.total)}</b><small>Enquiries</small></div><div><b>${num(s.today)}</b><small>Today</small></div><div><b>${num(s.admitted)}</b><small>Admitted</small></div><div><b>${pct(s.admitted, s.total)}%</b><small>Conversion</small></div></div>
-        ${spark(s.trend)}<div class="pf-c-meta">${esc(ago(s.lastAt))}${s.apiKeys ? ` · 🔌 ${s.apiKeys} API key${s.apiKeys > 1 ? 's' : ''}` : ''}${s.untouched ? ` · <span class="warn">${s.untouched} waiting for a call</span>` : ''}</div>`}
+        ${spark(s.trend)}<div class="pf-c-meta">${esc(ago(s.lastAt))}${s.apiKeys ? ` · 🔌 ${s.apiKeys} API key${s.apiKeys > 1 ? 's' : ''}` : ''}${s.debPushed !== null && s.debPushed !== undefined ? ` · 🎓 ${s.debPushed} sent to DEB` : ''}${s.untouched ? ` · <span class="warn">${s.untouched} waiting for a call</span>` : ''}</div>`}
         <div class="pf-c-link"><code>${esc(full(c.links.form))}</code><button class="btn ghost xs copy" data-u="${esc(full(c.links.form))}" type="button">📋 Copy</button></div>
         <div class="pf-c-act">
           <button class="btn primary xs open" type="button">📊 Open dashboard</button>
@@ -176,7 +176,7 @@
     return '';
   }
   const payload = () => ({ name: val('#fName'), short: val('#fShort'), slug: val('#fSlug'), city: val('#fCity'), address: val('#fAddress'), email: val('#fEmail'), phone: val('#fPhone'), website: val('#fWebsite'),
-    academicYear: val('#fAY'), feeYear: val('#fFeeYear'), color: $('#fColor').value, tagline: val('#fTagline'), logo: LOGO,
+    type: ($('input[name=ctype]:checked') || {}).value || 'regular', academicYear: val('#fAY'), feeYear: val('#fFeeYear'), color: $('#fColor').value, tagline: val('#fTagline'), logo: LOGO,
     contacts: $$('#contacts .pf-crow').map((d) => ({ name: $('.cn', d).value.trim(), phone: $('.cp', d).value.replace(/\D/g, '') })).filter((c) => c.name),
     programmes: ROWS.filter((r) => r.programme.trim()), adminName: val('#aName'), adminEmail: val('#aEmail'), adminMobile: val('#aMobile'), adminUser: val('#aUser'), adminPassword: $('#aPass').value });
   $('#back').addEventListener('click', () => showStep(step - 1));
@@ -201,7 +201,7 @@
   async function openWizard(slug) {
     EDIT = slug || null; slugTouched = false; $('#contacts').innerHTML = ''; ROWS = []; setLogo('');
     $$('.pf-step input:not([type=file]):not([type=color]), .pf-step textarea', wiz).forEach((i) => { i.value = ''; });
-    $('#fAY').value = '2027–28'; $('#aUser').value = 'admin'; $('#fColor').value = '#0B1F4B'; $('#typeBox').hidden = true;
+    $('#fAY').value = '2027–28'; $('#aUser').value = 'admin'; $('input[name=ctype][value=regular]').checked = true; $('#fColor').value = '#0B1F4B'; $('#typeBox').hidden = true;
     $('#fSlug').disabled = !!EDIT; $('#wizTitle').textContent = EDIT ? '✏️ Edit college' : '➕ Create a college';
     if (EDIT) {
       const [a, b] = await Promise.all([api(PROFILE(slug)), api(PROGS(slug))]);
@@ -209,7 +209,7 @@
       const c = a.college;
       Object.entries({ '#fName': c.name, '#fShort': c.short, '#fSlug': c.slug, '#fCity': c.city, '#fAddress': c.address, '#fEmail': c.email, '#fPhone': c.phone, '#fWebsite': c.website, '#fAY': c.academicYear, '#fFeeYear': c.feeYear, '#fTagline': c.tagline, '#aName': c.adminName, '#aEmail': c.adminEmail, '#aMobile': c.adminMobile })
         .forEach(([s, v]) => { $(s).value = v || ''; });
-      $('#fColor').value = c.color || '#0B1F4B'; setLogo(c.logo); (c.contacts || []).forEach(contactRow); ROWS = b.rows || [];
+      $('#fColor').value = c.color || '#0B1F4B'; setLogo(c.logo); $(`input[name=ctype][value=${c.type === 'ol' ? 'ol' : 'regular'}]`).checked = true; (c.contacts || []).forEach(contactRow); ROWS = b.rows || [];
     } else contactRow();
     drawRows(); showStep(1); wiz.hidden = false; $('#fName').focus();
   }

@@ -16,7 +16,7 @@ module.exports = function colleges(app, C) {
   function toCtx(r) {
     const cfg = JSON.parse(r.config || '{}');
     return {
-      slug: r.slug, isDefault: false, id: r.id, name: r.name, short: r.short, status: r.status, dbName: r.db_name,
+      slug: r.slug, isDefault: false, id: r.id, name: r.name, short: r.short, status: r.status, dbName: r.db_name, type: cfg.type === 'ol' ? 'ol' : 'regular',
       city: cfg.city || '', address: cfg.address || '', email: cfg.email || '', website: cfg.website || '', phone: cfg.phone || '', color: cfg.color || '#0B1F4B',
       tagline: cfg.tagline || '', academicYear: cfg.academicYear || '2027–28', feeYear: cfg.feeYear || `AY ${cfg.academicYear || '2027-28'}`, contacts: cfg.contacts || [],
       catalogue: build(cfg.catalogue || { UG: [], PG: [] }), rawCatalogue: cfg.catalogue || { UG: [], PG: [] }, hasLogo: !!r.logo,
@@ -79,7 +79,7 @@ module.exports = function colleges(app, C) {
   }
 
   // ---------- pages for a college: same screens, its own name / logo / links ----------
-  const STATIC = /^\/(style\.css|app\.js|admin\.css|guard\.js|panel\.js|help\.js|login\.js|apply\.js|apply\.css|tenant-shim\.js|api-keys\.js|platform\.css|favicon[^"]*|fonts\/)/;
+  const STATIC = /^\/(style\.css|app\.js|admin\.css|guard\.js|panel\.js|help\.js|login\.js|apply\.js|apply\.css|tenant-shim\.js|api-keys\.js|deb-tab\.js|platform\.css|favicon[^"]*|fonts\/)/;
   function brandHtml(html, req) {
     const t = tenant.cur(), b = tenant.base();
     const tok = req && C.readToken ? C.readToken(req) : null;
@@ -137,7 +137,8 @@ module.exports = function colleges(app, C) {
       const trend = await db.all("SELECT to_char(created_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS d, COUNT(*) AS n FROM enquiries WHERE created_at >= $1 GROUP BY 1 ORDER BY 1", [new Date(Date.now() - 14 * 864e5).toISOString()]);
       const untouched = await one("SELECT COUNT(*) AS n FROM enquiries WHERE status = 'New' AND COALESCE(call_count,0) = 0 AND created_at < $1", [new Date(Date.now() - 864e5).toISOString()]);
       const apiKeys = ((await db.getSetting('api_keys', [])) || []).filter((k) => !k.revokedAt).length;
-      return { apiKeys, total, today: todayN, week, admitted, apps, paid, collected, team, untouched, lastAt: lastAt && lastAt.at ? new Date(lastAt.at).toISOString() : null,
+      let debPushed = null; if (tenant.cur().type === 'ol') { try { debPushed = await one("SELECT COUNT(*) AS n FROM deb_learners WHERE status = 'Pushed'"); } catch { debPushed = 0; } }
+      return { apiKeys, debPushed, total, today: todayN, week, admitted, apps, paid, collected, team, untouched, lastAt: lastAt && lastAt.at ? new Date(lastAt.at).toISOString() : null,
         byStatus: Object.fromEntries(byStatus.map((x) => [x.status, Number(x.n)])), trend: trend.map((x) => ({ d: x.d, n: Number(x.n) })) };
     };
     return dbCtx ? tenant.als.run(dbCtx, run) : run();
@@ -149,7 +150,7 @@ module.exports = function colleges(app, C) {
       try { stats = await statsFor(await load(r.slug)); } catch (e) { err = e.message.slice(0, 120); }
       const cfg = JSON.parse(r.config || '{}');
       list.push({ slug: r.slug, name: r.name, short: r.short, city: cfg.city || '', status: r.status, logo: !!r.logo, created_at: r.created_at, adminUser: r.admin_user, adminEmail: r.admin_email,
-        programmes: build(cfg.catalogue || {}).FEE_TABLE.length, links: { form: `/c/${r.slug}/`, admin: `/c/${r.slug}/admin/login`, poster: `/c/${r.slug}/qr-poster.pdf` }, stats, error: err });
+        programmes: build(cfg.catalogue || {}).FEE_TABLE.length, type: cfg.type === 'ol' ? 'ol' : 'regular', links: { form: `/c/${r.slug}/`, admin: `/c/${r.slug}/admin/login`, poster: `/c/${r.slug}/qr-poster.pdf` }, stats, error: err });
     }
     res.json({ colleges: list, origin: C.PUBLIC_URL() || `${req.protocol}://${req.get('host')}` });
   });
@@ -279,7 +280,7 @@ module.exports = function colleges(app, C) {
   const slugify = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
   function readCollege(b) {
     const out = { name: C.clean(b.name, 120), short: C.clean(b.short, 12).toUpperCase().replace(/[^A-Z0-9]/g, ''), cfg: {
-      city: C.clean(b.city, 60), address: C.clean(b.address, 160), email: C.clean(b.email, 120), website: C.clean(b.website, 120), phone: String(b.phone || '').replace(/\D/g, '').slice(-10),
+      type: b.type === 'ol' ? 'ol' : 'regular', city: C.clean(b.city, 60), address: C.clean(b.address, 160), email: C.clean(b.email, 120), website: C.clean(b.website, 120), phone: String(b.phone || '').replace(/\D/g, '').slice(-10),
       tagline: C.clean(b.tagline, 200), academicYear: C.clean(b.academicYear, 12) || '2027–28', feeYear: C.clean(b.feeYear, 60), color: /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : '#0B1F4B',
       contacts: (Array.isArray(b.contacts) ? b.contacts : []).map((c) => ({ name: C.clean(c.name, 60), phone: String(c.phone || '').replace(/\D/g, '').slice(-10) })).filter((c) => c.name && /^[6-9]\d{9}$/.test(c.phone)).slice(0, 4),
       catalogue: rowsToCatalogue(Array.isArray(b.programmes) ? b.programmes : []) } };
@@ -310,7 +311,7 @@ module.exports = function colleges(app, C) {
     await db.registry.insert({ slug, name: c.name, short: c.short, db_name: dbName, config: JSON.stringify(c.cfg), logo, admin_user: adminUser, admin_hash: await bcrypt.hash(password, 12),
       admin_name: C.clean(b.adminName, 60) || 'Admin', admin_email: adminEmail, admin_mobile: String(b.adminMobile || '').replace(/\D/g, '').slice(-10), status: 'active' });
     try { await load(slug, true); } catch (e) { return res.status(500).json({ error: 'College saved, but its database could not be prepared: ' + e.message.slice(0, 150) }); }
-    C.audit(req, 'college_created', `${c.name} (/c/${slug}) · ${c.cfg.catalogue.UG.length + c.cfg.catalogue.PG.length} programmes · own database ${dbName}`, 'high');
+    C.audit(req, 'college_created', `${c.cfg.type === 'ol' ? '[Online Learning] ' : ''}${c.name} (/c/${slug}) · ${c.cfg.catalogue.UG.length + c.cfg.catalogue.PG.length} programmes · own database ${dbName}`, 'high');
     const origin = C.PUBLIC_URL() || `${req.protocol}://${req.get('host')}`;
     res.json({ ok: true, slug, password, adminUser, links: { form: `${origin}/c/${slug}/`, admin: `${origin}/c/${slug}/admin/login`, poster: `${origin}/c/${slug}/qr-poster.pdf` } });
   });

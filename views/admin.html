@@ -15,6 +15,7 @@
     <button class="tab" data-tab="table" role="tab" aria-selected="false">📋 Enquiries <span class="tab-count" id="tabCount">0</span></button>
     <button class="tab" data-tab="admissions" role="tab" aria-selected="false">🎓 Admissions <span class="tab-count alert" id="verifyCount" hidden>0</span></button>
     <button class="tab" data-tab="team" role="tab" aria-selected="false">👥 Team &amp; AI</button>
+    <!--DEB--><button class="tab" data-tab="deb" role="tab" aria-selected="false">🎓 DEB <span class="tab-count" id="debCount" hidden>0</span></button><!--/DEB-->
     <button class="tab" data-tab="security" role="tab" aria-selected="false">🛡️ Security <span class="tab-count alert" id="alertCount" hidden>0</span></button>
   </nav>
   <div class="tb-actions">
@@ -278,6 +279,55 @@
     </div>
   </div>
 
+  <!--DEB-->
+  <section id="tab-deb" class="tabpane" hidden>
+    <article class="card deb-hero">
+      <div class="deb-head"><div><b>🎓 UGC-DEB — Online Learning admissions</b><small>Kept separate from enquiries: learners here are only what is sent to the DEB portal.</small></div><div class="deb-deadline" id="debDeadline"></div></div>
+      <ol class="deb-steps" id="debSteps"><li data-s="1"><b>1</b> Connect DEB</li><li data-s="2"><b>2</b> Add learners</li><li data-s="3"><b>3</b> Verify DEB-IDs</li><li data-s="4"><b>4</b> Push to DEB</li></ol>
+      <div class="deb-kpis" id="debKpis"></div>
+    </article>
+
+    <article class="card">
+      <header class="ch"><div><b>🔐 DEB connection</b><small id="debConnSum">HEI code, API keys and programme codes from your DEB portal login</small></div><div class="ch-actions"><button class="btn ghost" id="debConnToggle" type="button">Open</button></div></header>
+      <form id="debConn" class="deb-conn" hidden autocomplete="off">
+        <div class="deb-g3">
+          <label>DEB HEI / AISHE code <small>(sent as “UniversityName”)</small><input id="dHei" maxlength="30" placeholder="e.g. U-XXXX"></label>
+          <label>Last date to submit to DEB<input id="dDeadline" type="date"></label>
+          <label class="deb-chk"><input type="checkbox" id="dKeyQ" checked> Also send the key in the link (as in DEB's Postman sample)</label>
+        </div>
+        <div class="deb-g2">
+          <fieldset><legend>“Student details” API <small>(GetStudentDetails — to verify DEB-IDs)</small></legend>
+            <label>ClientID<input id="dSId" maxlength="80" placeholder="…_GetStudentDetails"></label><label>APIKey<input id="dSKey" type="password" maxlength="200" placeholder="leave blank to keep the saved key" autocomplete="new-password"></label></fieldset>
+          <fieldset><legend>“Admission” API <small>(GetAdmissionDetails — to push admissions)</small></legend>
+            <label>ClientID<input id="dAId" maxlength="80" placeholder="…_GetAdmissionDetails"></label><label>APIKey<input id="dAKey" type="password" maxlength="200" placeholder="leave blank to keep the saved key" autocomplete="new-password"></label></fieldset>
+        </div>
+        <b class="deb-sub">Programme codes <small>— copy each “Programme Map Code” and “Mode of Education” from DEB portal → Programme name and Code</small></b>
+        <div class="table-wrap"><table class="deb-map"><thead><tr><th>Programme in this system</th><th>DEB programme map code</th><th>Mode of education</th></tr></thead><tbody id="dMap"></tbody></table></div>
+        <div class="deb-save"><label>Confirm your admin password <small>(needed when the code or keys change)</small><input id="dPass" type="password" autocomplete="current-password"></label><button class="btn primary" type="submit">💾 Save DEB connection</button></div>
+        <p class="cc-hint">🔒 Keys are stored encrypted and are never shown again. Only the main admin can see this page. Every change is in the Security log.</p>
+      </form>
+    </article>
+
+    <article class="card">
+      <header class="ch"><div><b>👩‍🎓 Learners for DEB</b><small id="debListSum"></small></div>
+        <div class="ch-actions deb-actions">
+          <label class="btn ghost">📥 Import Excel<input type="file" id="debFile" accept=".xlsx,.xlsm" hidden></label>
+          <button class="btn ghost" id="debFromAdm" type="button">🎓 From admissions</button>
+          <button class="btn ghost" id="debAdd" type="button">➕ Add learner</button>
+          <a class="btn ghost" id="debExport" href="/api/deb/export.xlsx">⬇ Excel</a>
+        </div></header>
+      <div class="deb-bar">
+        <select id="debFilter"><option value="">All</option><option>Ready</option><option>Incomplete</option><option>Pushed</option><option>Failed</option></select>
+        <input id="debQ" type="search" placeholder="Search name, DEB-ID, enrolment no…">
+        <span class="deb-sel"><b id="debSelN">0</b> selected</span>
+        <button class="btn ghost" id="debBulk" type="button">✏️ Set for selected</button>
+        <button class="btn ghost" id="debVerify" type="button">🔎 Verify DEB-IDs</button>
+        <button class="btn primary" id="debPush" type="button">🚀 Push to DEB</button>
+      </div>
+      <div class="table-wrap"><table class="deb-table"><thead><tr><th><input type="checkbox" id="debAll" aria-label="Select all"></th><th>Learner</th><th>Programme · DEB code</th><th>DEB-ID</th><th>Enrolment · admission date</th><th>Status</th><th>What is missing / DEB reply</th><th></th></tr></thead><tbody id="debRows"></tbody></table></div>
+    </article>
+  </section>
+  <!--/DEB-->
   <section id="tab-security" class="tabpane" hidden>
     <div class="sec-grid">
       <article class="card">
@@ -323,10 +373,12 @@
 </main>
 <div class="tip" id="tip" hidden></div>
 <div class="toast" id="toast"></div>
+<!--DEB--><div class="modal" id="debModal" hidden><div class="modal-box wide"><header class="modal-h"><b id="debMTitle"></b><button class="icon" data-close type="button" aria-label="Close">✕</button></header><div class="modal-b" id="debMBody"></div></div></div><!--/DEB-->
 <script src="/guard.js"></script>
 <script src="/panel.js"></script>
 <script src="/help.js"></script>
 <script src="/admin/admin.js"></script>
 <script src="/api-keys.js"></script>
+<!--DEB--><script src="/deb-tab.js"></script><!--/DEB-->
 </body>
 </html>

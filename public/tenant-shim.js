@@ -2,7 +2,7 @@
 (function () {
   var m = document.querySelector('meta[name="t-base"]'); var B = m ? m.content : '';
   window.__b = B; if (!B) return;
-  var STATIC = /^\/(style\.css|app\.js|admin\.css|guard\.js|panel\.js|help\.js|login\.js|apply\.js|apply\.css|tenant-shim\.js|api-keys\.js|platform\.css|favicon|fonts\/)/;
+  var STATIC = /^\/(style\.css|app\.js|admin\.css|guard\.js|panel\.js|help\.js|login\.js|apply\.js|apply\.css|tenant-shim\.js|api-keys\.js|deb-tab\.js|platform\.css|favicon|fonts\/)/;
   var fix = function (u) { return typeof u === 'string' && u.charAt(0) === '/' && u.charAt(1) !== '/' && u.indexOf(B + '/') !== 0 && u !== B && u !== '/platform' && !STATIC.test(u) ? B + u : u; };
   window.__u = fix;
   var f = window.fetch; window.fetch = function (u, o) { return f.call(this, fix(u), o); };
